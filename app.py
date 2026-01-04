@@ -14,7 +14,7 @@ if 'logged_in' not in st.session_state:
 if 'trades' not in st.session_state:
     st.session_state.trades = []
 if 'deposit' not in st.session_state:
-    st.session_state.deposit = 1000.0  # Депозит по умолчанию
+    st.session_state.deposit = 1000.0
 
 def get_crypto_data(ticker, tf):
     tf_map = {"5m": ("histominute", 5), "15m": ("histominute", 15), 
@@ -43,9 +43,11 @@ def update_trade_statuses(current_price):
                 elif trade['Стоп'] and current_price >= trade['Стоп']:
                     trade['Статус'] = "❌ STOP LOSS"
 
+# Сброс полей
 def reset_order_fields():
     st.session_state["stop_input"] = None
     st.session_state["take_input"] = None
+    st.session_state["amount_input"] = 0.0
 
 if not st.session_state.logged_in:
     st.title("🔐 Helzin Terminal")
@@ -59,8 +61,6 @@ if not st.session_state.logged_in:
 else:
     with st.sidebar:
         st.header(f"👤 {st.session_state.user}")
-        
-        # ГРАФА ДЕПОЗИТА (Сохраняется пока сам не изменишь)
         st.session_state.deposit = st.number_input("Ваш Депозит ($)", value=float(st.session_state.deposit), format="%.2f")
         
         st.divider()
@@ -73,10 +73,19 @@ else:
         curr_p = temp_df['close'].iloc[-1] if temp_df is not None else 0.0
         
         t_entry = st.number_input("Цена входа", value=float(curr_p), format="%.2f")
+        
+        # НОВАЯ ГРАФА: Количество монет
+        t_amount = st.number_input("Кол-во монет", value=0.0, step=0.001, format="%.4f", key="amount_input")
+        
+        # Расчет объема позиции
+        position_size = t_entry * t_amount
+        if position_size > 0:
+            st.caption(f"💰 Объем сделки: {position_size:.2f} $")
+            
         t_stop = st.number_input("Уровень СТОП", value=None, placeholder="0.00", format="%.2f", key="stop_input")
         t_take = st.number_input("Уровень ТЕЙК", value=None, placeholder="0.00", format="%.2f", key="take_input")
         
-        # РАСЧЕТ RR (РИСК/ПРИБЫЛЬ)
+        # Расчет RR
         rr_value = 0.0
         if t_entry and t_stop and t_take:
             try:
@@ -84,22 +93,23 @@ else:
                 reward = abs(t_take - t_entry)
                 if risk > 0:
                     rr_value = reward / risk
-                    st.info(f"📊 Соотношение RR: 1 к {rr_value:.2f}")
+                    st.info(f"📊 RR: 1 к {rr_value:.2f}")
             except:
                 pass
         
         if st.button("ОТКРЫТЬ ПОЗИЦИЮ", use_container_width=True):
-            if t_stop and t_take:
+            if t_stop and t_take and t_amount > 0:
                 st.session_state.trades.append({
                     "Время": datetime.now().strftime("%H:%M:%S"),
-                    "Тип": t_side, "Монета": t_coin, "Вход": t_entry, 
-                    "Стоп": t_stop, "Тейк": t_take, "RR": round(rr_value, 2), "Статус": "OPEN"
+                    "Тип": t_side, "Монета": t_coin, "Кол-во": t_amount,
+                    "Вход": t_entry, "Стоп": t_stop, "Тейк": t_take, 
+                    "RR": round(rr_value, 2), "Статус": "OPEN"
                 })
                 reset_order_fields()
-                st.success("Сделка сохранена!")
+                st.success("Ордер добавлен!")
                 st.rerun()
             else:
-                st.error("Укажите Стоп и Тейк!")
+                st.error("Заполните Кол-во, Стоп и Тейк!")
         
         st.divider()
         if st.button("Выход", use_container_width=True):
@@ -132,6 +142,7 @@ else:
 
     with tab2:
         if st.session_state.trades:
+            # Отображаем таблицу с количеством монет
             st.dataframe(pd.DataFrame(st.session_state.trades).iloc[::-1], use_container_width=True)
             if st.button("Очистить журнал"):
                 st.session_state.trades = []
