@@ -64,3 +64,4 @@ while True:
         st.warning(f"Подключение к шлюзу Binance... Проверьте формат тикера (например, BTC/USDT)")
         time.sleep(5)
         st.rerun()
+        
