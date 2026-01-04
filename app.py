@@ -28,7 +28,6 @@ def get_crypto_data(ticker, tf):
     except:
         return None
 
-# Функция проверки статусов
 def check_trade_logic(trades, current_price):
     for trade in trades:
         if trade['Статус'] == "OPEN":
@@ -39,51 +38,47 @@ def check_trade_logic(trades, current_price):
                 if current_price <= trade['Тейк']: trade['Статус'] = "✅ TAKE PROFIT"
                 elif current_price >= trade['Стоп']: trade['Статус'] = "❌ STOP LOSS"
 
-# Фрагмент для АВТО-ОБНОВЛЕНИЯ ГРАФИКА
 @st.fragment(run_every=3)
 def live_chart_section(coin, tf):
     df = get_crypto_data(coin, tf)
     if df is not None:
         price_now = df['close'].iloc[-1]
         st.metric(f"{coin}/USDT (LIVE)", f"${price_now:,.2f}")
-        
-        # Обновляем статусы сделок в реальном времени
         check_trade_logic(st.session_state.trades, price_now)
-        
-        fig = go.Figure(data=[go.Candlestick(
-            x=df['time'], open=df['open'], high=df['high'], 
-            low=df['low'], close=df['close'],
-            increasing_line_color='#26a69a', decreasing_line_color='#ef5350'
-        )])
+        fig = go.Figure(data=[go.Candlestick(x=df['time'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], increasing_line_color='#26a69a', decreasing_line_color='#ef5350')])
         fig.update_layout(template="plotly_dark", height=500, xaxis_rangeslider_visible=False, margin=dict(l=0, r=0, t=0, b=0))
         st.plotly_chart(fig, use_container_width=True)
 
+# БЛОК ВХОДА С ПОДДЕРЖКОЙ ENTER
 if not st.session_state.logged_in:
     st.title("🔐 Helzin Terminal")
-    u = st.text_input("Логин")
-    p = st.text_input("Пароль", type="password")
-    if st.button("Войти"):
-        if u == "admin" and p == "12345":
-            st.session_state.logged_in = True
-            st.rerun()
+    # Используем форму, чтобы работал Enter
+    with st.form("login_form"):
+        u = st.text_input("Логин")
+        p = st.text_input("Пароль", type="password")
+        submit_button = st.form_submit_button("Войти")
+        
+        if submit_button:
+            if u == "admin" and p == "12345":
+                st.session_state.logged_in = True
+                st.rerun()
+            else:
+                st.error("Неверный логин или пароль")
 else:
     with st.sidebar:
         st.header(f"👤 admin")
         st.session_state.deposit = st.number_input("Ваш Депозит ($)", value=float(st.session_state.deposit), format="%.2f")
-        
         st.divider()
         st.subheader("➕ Новая сделка")
-        
         t_side = st.radio("Направление", ["LONG", "SHORT"], horizontal=True)
         t_coin = st.text_input("Монета", "BTC").upper()
         
-        # ВСЕ ПОЛЯ ПУСТЫЕ
+        # ПУСТЫЕ ПОЛЯ
         t_entry = st.number_input("Цена входа", value=None, placeholder="0.00", format="%.2f", key="entry_input")
         t_amount = st.number_input("Кол-во монет", value=None, placeholder="0.00", format="%.4f", key="amt_input")
         t_stop = st.number_input("Уровень СТОП", value=None, placeholder="0.00", format="%.2f", key="sl_input")
         t_take = st.number_input("Уровень ТЕЙК", value=None, placeholder="0.00", format="%.2f", key="tp_input")
         
-        rr_val, p_result = 0.0, ""
         if t_entry and t_stop and t_take and t_amount:
             risk = abs(t_entry - t_stop)
             reward = abs(t_take - t_entry)
@@ -94,6 +89,12 @@ else:
 
         if st.button("ОТКРЫТЬ ПОЗИЦИЮ", use_container_width=True):
             if t_entry and t_stop and t_take and t_amount:
+                # Расчет RR перед сохранением
+                risk = abs(t_entry - t_stop)
+                reward = abs(t_take - t_entry)
+                rr_val = reward / risk if risk > 0 else 0
+                p_result = f"+{reward * t_amount:.2f} / -{risk * t_amount:.2f}"
+                
                 st.session_state.trades.append({
                     "id": datetime.now().timestamp(),
                     "Время": datetime.now().strftime("%H:%M:%S"),
@@ -101,12 +102,15 @@ else:
                     "Вход": t_entry, "Стоп": t_stop, "Тейк": t_take, 
                     "RR": round(rr_val, 2), "PL": p_result, "Статус": "OPEN"
                 })
-                # Очистка полей
                 for key in ["entry_input", "amt_input", "sl_input", "tp_input"]:
                     if key in st.session_state: del st.session_state[key]
                 st.rerun()
             else:
                 st.error("Заполни все поля!")
+        
+        if st.button("Выйти"):
+            st.session_state.logged_in = False
+            st.rerun()
 
     tab1, tab2 = st.tabs(["🕯 Торговый график", "📑 Журнал сделок"])
 
@@ -114,8 +118,6 @@ else:
         c1, c2 = st.columns([1, 3])
         active_coin = c1.text_input("Тикер", "BTC", key="main_coin").upper()
         active_tf = c2.select_slider("Таймфрейм", options=["5m", "15m", "1h", "4h", "1d"], value="15m")
-        
-        # Запуск живого фрагмента
         live_chart_section(active_coin, active_tf)
 
     with tab2:
@@ -137,10 +139,8 @@ else:
                 c[6].write(str(trade["Тейк"]))
                 c[7].write(str(trade["RR"]))
                 c[8].write(trade["PL"])
-                
                 color = "green" if "TAKE" in trade["Статус"] else "red" if "STOP" in trade["Статус"] else "white"
                 c[9].markdown(f":{color}[{trade['Статус']}]")
-                
                 if c[10].button("🗑️", key=f"del_{trade['id']}"):
                     st.session_state.trades = [t for t in st.session_state.trades if t['id'] != trade['id']]
                     st.rerun()
