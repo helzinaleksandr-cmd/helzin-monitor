@@ -22,22 +22,25 @@ def get_crypto_data(ticker, tf, market_type):
     tf_map = {"5m": ("histominute", 5), "15m": ("histominute", 15), 
               "1h": ("histohour", 1), "4h": ("histohour", 4), "1d": ("histoday", 1)}
     endpoint, aggregate = tf_map.get(tf, ("histominute", 15))
+    
+    # ПРАВИЛЬНЫЙ ВЫБОР РЫНКА
     exchange = "Binance" if market_type == "SPOT" else "BinanceFutures"
+    
     try:
         url = f"https://min-api.cryptocompare.com/data/v2/{endpoint}?fsym={ticker}&tsym=USDT&limit=1000&aggregate={aggregate}&e={exchange}"
         res = requests.get(url, timeout=5).json()
-        df = pd.DataFrame(res['Data']['Data'])
-        df['time'] = pd.to_datetime(df['time'], unit='s')
-        return df
+        if 'Data' in res and 'Data' in res['Data']:
+            df = pd.DataFrame(res['Data']['Data'])
+            df['time'] = pd.to_datetime(df['time'], unit='s')
+            return df
+        return None
     except:
         return None
 
 def check_trade_logic(current_price):
-    """Проверяет условия закрытия сделок и возвращает True, если статус изменился"""
     changed = False
     for trade in st.session_state.trades:
         if trade['Статус'] == "OPEN":
-            # Проверка для LONG
             if trade['Тип'] == "LONG":
                 if current_price >= trade['Тейк']:
                     trade['Статус'] = "✅ TAKE PROFIT"
@@ -45,7 +48,6 @@ def check_trade_logic(current_price):
                 elif current_price <= trade['Stop']:
                     trade['Статус'] = "❌ STOP LOSS"
                     changed = True
-            # Проверка для SHORT
             elif trade['Тип'] == "SHORT":
                 if current_price <= trade['Тейк']:
                     trade['Статус'] = "✅ TAKE PROFIT"
@@ -62,25 +64,28 @@ def live_chart_section(coin, tf, market_type):
         price_now = df['close'].iloc[-1]
         st.metric(f"{coin}/USDT ({market_type})", f"${price_now:,.2f}")
         
-        # Если сделка закрылась по цене — обновляем всю страницу для синхронизации таблицы
         if check_trade_logic(price_now):
             st.rerun()
             
-        fig = go.Figure(data=[go.Candlestick(x=df['time'], open=df['open'], high=df['high'], low=df['low'], close=df['close'],
-                                          increasing_line_color='#26a69a', decreasing_line_color='#ef5350')])
+        fig = go.Figure(data=[go.Candlestick(
+            x=df['time'], open=df['open'], high=df['high'], low=df['low'], close=df['close'],
+            increasing_line_color='#26a69a', decreasing_line_color='#ef5350'
+        )])
         
-        # РИСУЕМ ЛИНИИ АКТУАЛЬНЫХ СДЕЛОК
+        # Линии сделок
         for trade in st.session_state.trades:
             if trade['Статус'] == "OPEN" and trade['Монета'] == coin:
-                # Вход
                 fig.add_hline(y=trade['Вход'], line_dash="solid", line_color="white", annotation_text="ENTRY")
-                # Тейк
                 fig.add_hline(y=trade['Тейк'], line_dash="dash", line_color="#00ff88", annotation_text="TP")
-                # Стоп
                 fig.add_hline(y=trade['Stop'], line_dash="dash", line_color="#ff4b4b", annotation_text="SL")
 
-        fig.update_layout(template="plotly_dark", height=500, xaxis_rangeslider_visible=False, 
-                          margin=dict(l=10, r=10, t=10, b=10), dragmode='pan', yaxis=dict(side="right", fixedrange=False))
+        # ГИБКИЙ МАСШТАБ (Тяни шкалу справа!)
+        fig.update_layout(
+            template="plotly_dark", height=600, xaxis_rangeslider_visible=False,
+            margin=dict(l=10, r=10, t=10, b=10), dragmode='pan',
+            yaxis=dict(side="right", fixedrange=False, autorange=True),
+            xaxis=dict(fixedrange=False)
+        )
         st.plotly_chart(fig, use_container_width=True, config={'scrollZoom': True})
 
 def render_equity_curve(period_label):
@@ -98,7 +103,7 @@ def render_equity_curve(period_label):
     df_equity = pd.DataFrame(history)
     fig_equity = go.Figure()
     fig_equity.add_trace(go.Scatter(x=df_equity['time'], y=df_equity['balance'], mode='lines+markers', 
-                                   line=dict(color=st.session_state.equity_style, width=2), fill='tozeroy', name="Balance"))
+                                   line=dict(color=st.session_state.equity_style, width=2), fill='tozeroy'))
     fig_equity.update_layout(template="plotly_dark", height=200, margin=dict(l=10, r=10, t=10, b=10), yaxis=dict(side="right"))
     st.plotly_chart(fig_equity, use_container_width=True)
 
@@ -144,14 +149,15 @@ else:
     t1, t2 = st.tabs(["🕯 Торговля", "📑 Журнал"])
     with t1:
         c1, c2, c3 = st.columns([1, 1, 3])
-        active_coin = c1.text_input("Тикер", "BTC").upper()
-        m_type = c2.selectbox("Рынок", ["SPOT", "FUTURES"])
+        active_coin = c1.text_input("Тикер", "BTC", key="main_coin_input").upper()
+        # ВЫБОР РЫНКА ТЕПЕРЬ РАБОТАЕТ
+        m_type = c2.selectbox("Рынок", ["SPOT", "FUTURES"], key="market_type_selector")
         with c3:
             st.write("Таймфрейм")
             bc = st.columns(5)
             tfs = ["5m", "15m", "1h", "4h", "1d"]
             for i, f in enumerate(tfs):
-                if bc[i].button(f, use_container_width=True):
+                if bc[i].button(f, key=f"tf_{f}", use_container_width=True):
                     st.session_state.timeframe = f
                     st.rerun()
         
@@ -172,6 +178,6 @@ else:
                 for i, v in enumerate(data): c[i].write(v)
                 color = "green" if "TAKE" in trade["Статус"] else "red" if "STOP" in trade["Статус"] else "white"
                 c[9].markdown(f":{color}[{trade['Статус']}]")
-                if c[10].button("🗑️", key=trade["id"]):
+                if c[10].button("🗑️", key=f"del_{trade['id']}"):
                     st.session_state.trades = [t for t in st.session_state.trades if t['id'] != trade['id']]
                     st.rerun()
