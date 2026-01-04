@@ -1,32 +1,36 @@
 import streamlit as st
 import requests
-import time
 import pandas as pd
+import time
 
-st.set_page_config(page_title="Helzin Monitor", layout="wide")
-st.title("📊 Helzin Market Monitor")
+st.set_page_config(page_title="Helzin Terminal", layout="wide")
+st.title("🚀 Helzin Market Monitor")
 
-symbol = st.sidebar.text_input("Тикер монеты", "BTCUSDT").upper()
-price_metric = st.empty()
+# Настройки
+symbol = st.sidebar.text_input("Тикер", "BTCUSDT").upper()
 
-if 'price_history' not in st.session_state:
-    st.session_state.price_history = []
+if 'history' not in st.session_state:
+    st.session_state.history = pd.DataFrame(columns=['Время', 'Цена'])
+
+placeholder = st.empty()
 
 while True:
     try:
-        url = f"https://api.binance.com/api/3/ticker/24hr?symbol={symbol}"
-        res = requests.get(url).json()
-        current_p = float(res['lastPrice'])
+        # В облаке мы используем стандартный защищенный запрос
+        url = f"https://api.binance.com/api/3/ticker/price?symbol={symbol}"
+        data = requests.get(url, timeout=5).json()
+        price = float(data['price'])
         
-        price_metric.metric("Цена", f"${current_p:,.2f}")
+        # Обновляем таблицу
+        new_row = pd.DataFrame({'Время': [time.strftime("%H:%M:%S")], 'Цена': [price]})
+        st.session_state.history = pd.concat([st.session_state.history, new_row]).iloc[-20:]
         
-        new_row = {"Время": time.strftime("%H:%M:%S"), "Цена": current_p}
-        st.session_state.price_history.insert(0, new_row)
-        if len(st.session_state.price_history) > 10:
-            st.session_state.price_history.pop()
+        with placeholder.container():
+            st.metric(f"Текущая цена {symbol}", f"${price:,.2f}")
+            st.line_chart(st.session_state.history.set_index('Время'))
+            st.table(st.session_state.history.iloc[::-1])
             
-        st.table(pd.DataFrame(st.session_state.price_history))
         time.sleep(2)
-    except:
-        st.error("Связь с Binance...")
+    except Exception as e:
+        st.error(f"Ошибка получения данных. Проверьте тикер {symbol}")
         time.sleep(5)
