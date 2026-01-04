@@ -4,95 +4,76 @@ import pandas as pd
 from datetime import datetime
 
 # Настройки страницы
-st.set_page_config(page_title="Helzin Terminal Pro", layout="wide")
+st.set_page_config(page_title="Helzin Pro Terminal", layout="wide")
 
-# Инициализация базы пользователей и состояния входа
+# Инициализация (база пользователей)
 if 'users' not in st.session_state:
     st.session_state.users = {"admin": "12345"}
 if 'logged_in' not in st.session_state:
     st.session_state.logged_in = False
-if 'history' not in st.session_state:
-    st.session_state.history = pd.DataFrame(columns=['Время', 'Цена'])
+
+# --- ФУНКЦИЯ ПОЛУЧЕНИЯ ИСТОРИИ (КАК НА БИРЖЕ) ---
+def get_binance_history(ticker):
+    try:
+        # Запрашиваем последние 100 минут истории с Binance через шлюз
+        url = f"https://min-api.cryptocompare.com/data/v2/histominute?fsym={ticker}&tsym=USDT&limit=100&e=Binance"
+        res = requests.get(url, timeout=5).json()
+        data = res['Data']['Data']
+        df = pd.DataFrame(data)
+        # Превращаем время в понятный формат
+        df['time'] = pd.to_datetime(df['time'], unit='s')
+        return df[['time', 'close']]
+    except:
+        return None
 
 # --- ЭКРАН ВХОДА ---
 def auth_ui():
-    st.title("🔐 Авторизация в Helzin Pro")
-    tab_login, tab_register = st.tabs(["Вход", "Регистрация"])
-    
-    with tab_login:
-        u = st.text_input("Логин", key="l_u")
-        p = st.text_input("Пароль", type="password", key="l_p")
-        if st.button("Войти"):
-            if u in st.session_state.users and st.session_state.users[u] == p:
-                st.session_state.logged_in = True
-                st.session_state.user = u
-                st.rerun()
-            else:
-                st.error("Ошибка: проверьте логин и пароль")
-                
-    with tab_register:
-        new_u = st.text_input("Новый логин", key="r_u")
-        new_p = st.text_input("Новый пароль", type="password", key="r_p")
-        if st.button("Зарегистрироваться"):
-            if new_u and new_p:
-                st.session_state.users[new_u] = new_p
-                st.success("Аккаунт создан успешно! Перейдите во вкладку 'Вход'.")
+    st.title("🔐 Helzin Terminal: Авторизация")
+    u = st.text_input("Логин")
+    p = st.text_input("Пароль", type="password")
+    if st.button("Войти"):
+        if u in st.session_state.users and st.session_state.users[u] == p:
+            st.session_state.logged_in = True
+            st.session_state.user = u
+            st.rerun()
 
-# --- ОСНОВНОЙ ИНТЕРФЕЙС ТЕРМИНАЛА ---
+# --- ИНТЕРФЕЙС ТЕРМИНАЛА ---
 def terminal_ui():
-    # Боковая панель
     st.sidebar.title(f"👤 {st.session_state.user}")
     if st.sidebar.button("Выйти"):
         st.session_state.logged_in = False
         st.rerun()
     
-    # Кнопка ручного обновления и авто-обновление каждые 2 секунды
-    st.sidebar.divider()
-    if st.sidebar.button("Обновить цену вручную"):
-        st.rerun()
+    tab1, tab2 = st.tabs(["📊 Биржевой график", "👥 Менеджер"])
 
-    # СОЗДАНИЕ ВКЛАДОК
-    tab_monitor, tab_admin, tab_about = st.tabs(["📊 Мониторинг", "👥 Менеджер", "📂 Инфо"])
-
-    with tab_monitor:
-        st.subheader("Живые котировки Binance")
-        symbol = st.text_input("Тикер", "BTC").upper()
+    with tab1:
+        st.subheader("Аналитика рынка в реальном времени")
+        symbol = st.text_input("Тикер (BTC, ETH, SOL)", "BTC").upper()
         
-        try:
-            # Получение цены
-            url = f"https://min-api.cryptocompare.com/data/price?fsym={symbol}&tsyms=USDT&e=Binance"
-            res = requests.get(url, timeout=5).json()
-            price = res['USDT']
-            now = datetime.now().strftime("%H:%M:%S")
+        # Получаем исторические данные
+        history_df = get_binance_history(symbol)
+        
+        if history_df is not None:
+            current_price = history_df['close'].iloc[-1]
+            st.metric(f"Текущая цена {symbol}/USDT (Binance)", f"${current_price:,.2f}")
             
-            # Обновление истории
-            new_data = pd.DataFrame({'Время': [now], 'Цена': [price]})
-            st.session_state.history = pd.concat([st.session_state.history, new_data]).iloc[-20:]
+            # РИСУЕМ ГРАФИК С ИСТОРИЕЙ
+            st.write("### История цены (последние 100 минут)")
+            st.area_chart(history_df.set_index('time')) # Area chart выглядит солиднее
             
-            # Отрисовка
-            c1, c2 = st.columns([1, 2])
-            c1.metric(f"{symbol}/USDT", f"${price:,.2f}")
-            c1.write("### Последние изменения")
-            c1.dataframe(st.session_state.history.iloc[::-1], use_container_width=True)
-            c2.write("### График")
-            c2.line_chart(st.session_state.history.set_index('Время'))
-            
-        except Exception as e:
-            st.warning("Ожидание данных с Binance...")
-
-    with tab_admin:
-        st.subheader("Управление пользователями")
-        if st.session_state.user == "admin":
-            st.write("База данных клиентов:")
-            u_df = pd.DataFrame(list(st.session_state.users.items()), columns=['Логин', 'Пароль'])
-            st.table(u_df)
+            st.write("### Таблица котировок")
+            st.dataframe(history_df.iloc[::-1], use_container_width=True)
         else:
-            st.error("У вас нет прав администратора")
+            st.error("Не удалось подгрузить историю. Проверьте тикер.")
+        
+        if st.button("Обновить данные"):
+            st.rerun()
 
-    with tab_about:
-        st.info("Helzin Terminal v1.1 — Система мониторинга с модулем регистрации.")
+    with tab2:
+        if st.session_state.user == "admin":
+            st.table(pd.DataFrame(list(st.session_state.users.items()), columns=['Логин', 'Пароль']))
 
-# Запуск приложения
+# Запуск
 if not st.session_state.logged_in:
     auth_ui()
 else:
