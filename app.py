@@ -1,39 +1,47 @@
 import streamlit as st
-import yfinance as yf
+import requests
 import pandas as pd
 import time
 
-st.set_page_config(page_title="Helzin Terminal", layout="wide")
-st.title("🚀 Helzin Market Monitor")
+st.set_page_config(page_title="Helzin Binance Terminal", layout="wide")
+st.title("🚀 Helzin Market Monitor (Binance Live)")
 
-# Настройки в боковой панели
-st.sidebar.info("Для крипты используйте формат: BTC-USD, ETH-USD")
-symbol = st.sidebar.text_input("Тикер монеты", "BTC-USD").upper()
+symbol = st.sidebar.text_input("Тикер Binance", "BTCUSDT").upper()
 
 if 'history' not in st.session_state:
-    st.session_state.history = []
+    st.session_state.history = pd.DataFrame(columns=['Время', 'Цена'])
 
 placeholder = st.empty()
 
+# Специальные заголовки, чтобы Binance не блокировал облачный сервер
+headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+}
+
 while True:
     try:
-        # Получаем данные из Yahoo Finance (очень стабильно для облака)
-        data = yf.Ticker(symbol).history(period="1d", interval="1m")
-        if not data.empty:
-            price = data['Close'].iloc[-1]
-            st.session_state.history.append(price)
-            
-            # Ограничиваем историю 30 точками
-            if len(st.session_state.history) > 30:
-                st.session_state.history.pop(0)
-
-            with placeholder.container():
-                st.metric(f"Цена {symbol} (Yahoo)", f"${price:,.2f}")
-                st.line_chart(st.session_state.history)
+        # Пытаемся подключиться через альтернативный шлюз api3
+        url = f"https://api3.binance.com/api/3/ticker/price?symbol={symbol}"
+        response = requests.get(url, headers=headers, timeout=10)
         
-        time.sleep(10) # Yahoo не любит слишком частые запросы, 10 сек — идеально
+        if response.status_status == 200:
+            data = response.json()
+            price = float(data['price'])
+            
+            new_row = pd.DataFrame({'Время': [time.strftime("%H:%M:%S")], 'Цена': [price]})
+            st.session_state.history = pd.concat([st.session_state.history, new_row]).iloc[-20:]
+            
+            with placeholder.container():
+                st.metric(f"Binance Live: {symbol}", f"${price:,.2f}")
+                st.line_chart(st.session_state.history.set_index('Время'))
+                st.table(st.session_state.history.iloc[::-1])
+        else:
+            st.error(f"Binance ответил кодом {response.status_code}. Пробуем пробиться...")
+            
+        time.sleep(2)
         st.rerun()
+        
     except Exception as e:
-        st.error(f"Служба поиска данных временно недоступна. Попробуем снова...")
-        time.sleep(10)
+        st.error("Поиск шлюза Binance... Пожалуйста, подождите.")
+        time.sleep(5)
         st.rerun()
