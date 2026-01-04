@@ -1,43 +1,42 @@
 import streamlit as st
+import ccxt
 import pandas as pd
 import time
-import json
-from websocket import create_connection
 
 st.set_page_config(page_title="Helzin Binance Terminal", layout="wide")
-st.title("🚀 Helzin Market Monitor (Binance Live)")
+st.title("🚀 Helzin Market Monitor (Binance Pro)")
 
-symbol = st.sidebar.text_input("Тикер Binance", "BTCUSDT").lower()
+symbol = st.sidebar.text_input("Тикер Binance", "BTC/USDT").upper()
 
 if 'history' not in st.session_state:
     st.session_state.history = pd.DataFrame(columns=['Время', 'Цена'])
 
+# Инициализация биржи (ccxt сама выберет лучший путь)
+exchange = ccxt.binance({
+    'enableRateLimit': True,
+})
+
 placeholder = st.empty()
 
-# Используем WebSocket - он пробивает блокировки 451
-ws_url = f"wss://stream.binance.com:9443/ws/{symbol}@ticker"
-
-def stream_data():
+while True:
     try:
-        ws = create_connection(ws_url)
-        while True:
-            result = ws.recv()
-            data = json.loads(result)
-            price = float(data['c']) # 'c' - это текущая цена в Binance WS
+        # Получаем данные через профессиональный шлюз
+        ticker = exchange.fetch_ticker(symbol)
+        price = ticker['last']
+        
+        # Обновляем историю
+        new_row = pd.DataFrame({'Время': [time.strftime("%H:%M:%S")], 'Цена': [price]})
+        st.session_state.history = pd.concat([st.session_state.history, new_row]).iloc[-20:]
+        
+        with placeholder.container():
+            st.metric(f"Binance Live: {symbol}", f"${price:,.2f}")
+            st.line_chart(st.session_state.history.set_index('Время'))
+            st.table(st.session_state.history.iloc[::-1])
             
-            # Обновляем данные
-            new_row = pd.DataFrame({'Время': [time.strftime("%H:%M:%S")], 'Цена': [price]})
-            st.session_state.history = pd.concat([st.session_state.history, new_row]).iloc[-20:]
-            
-            with placeholder.container():
-                st.metric(f"Binance Live: {symbol.upper()}", f"${price:,.2f}")
-                st.line_chart(st.session_state.history.set_index('Время'))
-                st.table(st.session_state.history.iloc[::-1])
-            
-            time.sleep(1) # Обновление каждую секунду!
+        time.sleep(2)
+        st.rerun()
+        
     except Exception as e:
-        st.error(f"Переподключение к Binance...")
+        st.error(f"Поиск стабильного шлюза Binance... Проверьте тикер (формат BTC/USDT)")
         time.sleep(5)
         st.rerun()
-
-stream_data()
