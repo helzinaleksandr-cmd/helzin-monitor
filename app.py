@@ -125,3 +125,4 @@ with tab2:
                 st.rerun()
     else:
         st.info("Сделок нет.")
+        
