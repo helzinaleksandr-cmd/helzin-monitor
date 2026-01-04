@@ -49,64 +49,54 @@ def live_chart_section(coin, tf):
         fig.update_layout(template="plotly_dark", height=500, xaxis_rangeslider_visible=False, margin=dict(l=0, r=0, t=0, b=0))
         st.plotly_chart(fig, use_container_width=True)
 
-# БЛОК ВХОДА С ПОДДЕРЖКОЙ ENTER
+# БЛОК ВХОДА
 if not st.session_state.logged_in:
     st.title("🔐 Helzin Terminal")
-    # Используем форму, чтобы работал Enter
     with st.form("login_form"):
         u = st.text_input("Логин")
         p = st.text_input("Пароль", type="password")
-        submit_button = st.form_submit_button("Войти")
-        
-        if submit_button:
+        if st.form_submit_button("Войти"):
             if u == "admin" and p == "12345":
                 st.session_state.logged_in = True
                 st.rerun()
-            else:
-                st.error("Неверный логин или пароль")
+            else: st.error("Ошибка входа")
 else:
     with st.sidebar:
         st.header(f"👤 admin")
         st.session_state.deposit = st.number_input("Ваш Депозит ($)", value=float(st.session_state.deposit), format="%.2f")
         st.divider()
         st.subheader("➕ Новая сделка")
-        t_side = st.radio("Направление", ["LONG", "SHORT"], horizontal=True)
-        t_coin = st.text_input("Монета", "BTC").upper()
         
-        # ПУСТЫЕ ПОЛЯ
-        t_entry = st.number_input("Цена входа", value=None, placeholder="0.00", format="%.2f", key="entry_input")
-        t_amount = st.number_input("Кол-во монет", value=None, placeholder="0.00", format="%.4f", key="amt_input")
-        t_stop = st.number_input("Уровень СТОП", value=None, placeholder="0.00", format="%.2f", key="sl_input")
-        t_take = st.number_input("Уровень ТЕЙК", value=None, placeholder="0.00", format="%.2f", key="tp_input")
-        
-        if t_entry and t_stop and t_take and t_amount:
-            risk = abs(t_entry - t_stop)
-            reward = abs(t_take - t_entry)
-            if risk > 0:
-                rr_val = reward / risk
-                p_result = f"+{reward * t_amount:.2f} / -{risk * t_amount:.2f}"
-                st.info(f"📊 RR: 1 к {rr_val:.2f} | P/L: {p_result}$")
-
-        if st.button("ОТКРЫТЬ ПОЗИЦИЮ", use_container_width=True):
-            if t_entry and t_stop and t_take and t_amount:
-                # Расчет RR перед сохранением
-                risk = abs(t_entry - t_stop)
-                reward = abs(t_take - t_entry)
-                rr_val = reward / risk if risk > 0 else 0
-                p_result = f"+{reward * t_amount:.2f} / -{risk * t_amount:.2f}"
-                
-                st.session_state.trades.append({
-                    "id": datetime.now().timestamp(),
-                    "Время": datetime.now().strftime("%H:%M:%S"),
-                    "Тип": t_side, "Монета": t_coin, "Кол-во": t_amount,
-                    "Вход": t_entry, "Стоп": t_stop, "Тейк": t_take, 
-                    "RR": round(rr_val, 2), "PL": p_result, "Статус": "OPEN"
-                })
-                for key in ["entry_input", "amt_input", "sl_input", "tp_input"]:
-                    if key in st.session_state: del st.session_state[key]
-                st.rerun()
-            else:
-                st.error("Заполни все поля!")
+        # Используем форму с АВТО-ОЧИСТКОЙ ПОЛЕЙ
+        with st.form("trade_form", clear_on_submit=True):
+            t_side = st.radio("Направление", ["LONG", "SHORT"], horizontal=True)
+            t_coin = st.text_input("Монета", value="BTC").upper()
+            
+            # Поля пустые по умолчанию
+            t_entry = st.number_input("Цена входа", value=None, placeholder="0.00", format="%.2f")
+            t_amount = st.number_input("Кол-во монет", value=None, placeholder="0.00", format="%.4f")
+            t_stop = st.number_input("Уровень СТОП", value=None, placeholder="0.00", format="%.2f")
+            t_take = st.number_input("Уровень ТЕЙК", value=None, placeholder="0.00", format="%.2f")
+            
+            submit_trade = st.form_submit_button("ОТКРЫТЬ ПОЗИЦИЮ", use_container_width=True)
+            
+            if submit_trade:
+                if t_entry and t_stop and t_take and t_amount:
+                    risk = abs(t_entry - t_stop)
+                    reward = abs(t_take - t_entry)
+                    rr_val = round(reward / risk, 2) if risk > 0 else 0
+                    p_res = f"+{reward * t_amount:.2f} / -{risk * t_amount:.2f}"
+                    
+                    st.session_state.trades.append({
+                        "id": datetime.now().timestamp(),
+                        "Время": datetime.now().strftime("%H:%M:%S"),
+                        "Тип": t_side, "Монета": t_coin, "Кол-во": t_amount,
+                        "Вход": t_entry, "Стоп": t_stop, "Тейк": t_take, 
+                        "RR": rr_val, "PL": p_res, "Статус": "OPEN"
+                    })
+                    st.rerun()
+                else:
+                    st.error("Заполни все поля!")
         
         if st.button("Выйти"):
             st.session_state.logged_in = False
