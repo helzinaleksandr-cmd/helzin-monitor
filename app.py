@@ -4,62 +4,56 @@ import pandas as pd
 import time
 from datetime import datetime
 
-# Настройка интерфейса профессионального терминала
-st.set_page_config(page_title="Helzin Binance Pro", layout="wide")
+st.set_page_config(page_title="Helzin Binance Terminal", layout="wide")
 st.title("🚀 Helzin Market Monitor (Binance Pro Live)")
 
-# Инициализация сессии для хранения данных
+# Боковая панель
+symbol = st.sidebar.text_input("Тикер (со слешем)", "BTC/USDT").upper()
+
 if 'history' not in st.session_state:
     st.session_state.history = pd.DataFrame(columns=['Время', 'Цена'])
-if 'journal' not in st.session_state:
-    st.session_state.journal = pd.DataFrame(columns=['Время', 'Тикер', 'Цена', 'Тип'])
 
-# Боковая панель управления
-st.sidebar.header("Настройки терминала")
-symbol = st.sidebar.text_input("Тикер (формат BTC/USDT)", "BTC/USDT").upper()
+placeholder = st.empty()
 
-# Профессиональное подключение через CCXT
 @st.cache_resource
-def get_binance():
-    # Используем настройки для обхода блокировок облачных провайдеров
+def get_exchange():
+    # Настройка профессионального клиента для обхода блокировки 451
     exchange = ccxt.binance({
         'enableRateLimit': True,
         'options': {'adjustForTimeDifference': True}
     })
-    # Принудительно используем альтернативные API-шлюзы
+    # Используем альтернативный шлюз, который чаще всего открыт для облаков
     exchange.urls['api']['public'] = 'https://api1.binance.com/api/3'
     return exchange
 
-client = get_binance()
-
-# Основной интерфейс
-col1, col2 = st.columns([2, 1])
-
-placeholder = st.empty()
+binance = get_exchange()
 
 while True:
     try:
-        # Получение данных в реальном времени
-        ticker = client.fetch_ticker(symbol)
+        # Пытаемся получить цену напрямую через профессиональный API
+        ticker = binance.fetch_ticker(symbol)
         price = ticker['last']
-        now = datetime.now().strftime("%H:%M:%S")
+        current_time = datetime.now().strftime("%H:%M:%S")
         
-        # Обновление графика
-        new_data = pd.DataFrame({'Время': [now], 'Цена': [price]})
-        st.session_state.history = pd.concat([st.session_state.history, new_data]).iloc[-30:]
+        # Обновляем таблицу истории (последние 30 тиков)
+        new_row = pd.DataFrame({'Время': [current_time], 'Цена': [price]})
+        st.session_state.history = pd.concat([st.session_state.history, new_row]).iloc[-30:]
         
         with placeholder.container():
-            c1, c2 = st.columns(2)
-            c1.metric(f"Текущая цена {symbol}", f"${price:,.2f}")
-            c2.line_chart(st.session_state.history.set_index('Время'))
-            
-            st.write("### Журнал мониторинга")
-            st.dataframe(st.session_state.history.iloc[::-1], use_container_width=True)
-            
-        time.sleep(1)
-        st.rerun() # Живое обновление страницы
+            col1, col2 = st.columns([1, 2])
+            with col1:
+                st.metric(f"Binance: {symbol}", f"${price:,.2f}")
+                st.write("### Журнал цен")
+                st.dataframe(st.session_state.history.iloc[::-1], use_container_width=True)
+            with col2:
+                st.write("### График Real-time")
+                st.line_chart(st.session_state.history.set_index('Время'))
+                
+        time.sleep(1) # Обновление каждую секунду
+        st.rerun()
         
     except Exception as e:
-        st.warning("Связь с Binance... Поиск свободного шлюза.")
+        # Если Binance все же сбросил соединение, пробуем через 5 секунд
+        st.warning("Переподключение к Binance... Поиск свободного шлюза.")
         time.sleep(5)
         st.rerun()
