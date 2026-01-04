@@ -3,7 +3,7 @@ import requests
 import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime
-from streamlit_autorefresh import st_autorefresh # Не забудь: pip install streamlit-autorefresh
+from streamlit_autorefresh import st_autorefresh # pip install streamlit-autorefresh
 
 st.set_page_config(page_title="Helzin Trading Terminal", layout="wide")
 
@@ -31,20 +31,15 @@ def get_crypto_data(ticker, tf):
     except:
         return None
 
-# Функция проверки статуса сделок
 def check_trade_logic(trades, current_price):
     for trade in trades:
         if trade['Статус'] == "OPEN":
             if trade['Тип'] == "LONG":
-                if current_price >= trade['Тейк']:
-                    trade['Статус'] = "✅ TAKE PROFIT"
-                elif current_price <= trade['Стоп']:
-                    trade['Статус'] = "❌ STOP LOSS"
+                if current_price >= trade['Тейк']: trade['Статус'] = "✅ TAKE PROFIT"
+                elif current_price <= trade['Стоп']: trade['Статус'] = "❌ STOP LOSS"
             else: # SHORT
-                if current_price <= trade['Тейк']:
-                    trade['Статус'] = "✅ TAKE PROFIT"
-                elif current_price >= trade['Стоп']:
-                    trade['Статус'] = "❌ STOP LOSS"
+                if current_price <= trade['Тейк']: trade['Статус'] = "✅ TAKE PROFIT"
+                elif current_price >= trade['Стоп']: trade['Статус'] = "❌ STOP LOSS"
 
 if not st.session_state.logged_in:
     st.title("🔐 Helzin Terminal")
@@ -69,9 +64,10 @@ else:
         curr_p = temp_df['close'].iloc[-1] if temp_df is not None else 0.0
         
         t_entry = st.number_input("Цена входа", value=float(curr_p), format="%.2f")
-        t_amount = st.number_input("Кол-во монет", value=None, placeholder="0.00", format="%.4f", key="amt")
-        t_stop = st.number_input("Уровень СТОП", value=None, placeholder="0.00", format="%.2f", key="sl")
-        t_take = st.number_input("Уровень ТЕЙК", value=None, placeholder="0.00", format="%.2f", key="tp")
+        # Поля пустые (value=None)
+        t_amount = st.number_input("Кол-во монет", value=None, placeholder="0.00", format="%.4f", key="amt_input")
+        t_stop = st.number_input("Уровень СТОП", value=None, placeholder="0.00", format="%.2f", key="sl_input")
+        t_take = st.number_input("Уровень ТЕЙК", value=None, placeholder="0.00", format="%.2f", key="tp_input")
         
         rr_val, p_profit, p_loss = 0.0, 0.0, 0.0
         if t_entry and t_stop and t_take and t_amount:
@@ -83,7 +79,7 @@ else:
             p_profit, p_loss = reward_pc * t_amount, risk_pc * t_amount
             if risk_pc > 0:
                 rr_val = reward_pc / risk_pc
-                st.info(f"📊 RR: 1 к {rr_val:.2f} | Риск: -{p_loss:.2f}$ | Тейк: +{p_profit:.2f}$")
+                st.info(f"📊 RR: 1 к {rr_val:.2f} | P: +{p_profit:.2f}$ | L: -{p_loss:.2f}$")
 
         if st.button("ОТКРЫТЬ ПОЗИЦИЮ", use_container_width=True):
             if t_stop and t_take and t_amount:
@@ -92,23 +88,23 @@ else:
                     "Время": datetime.now().strftime("%H:%M:%S"),
                     "Тип": t_side, "Монета": t_coin, "Кол-во": t_amount,
                     "Вход": t_entry, "Стоп": t_stop, "Тейк": t_take, 
-                    "RR": round(rr_val, 2), "Profit": round(p_profit, 2), 
-                    "Loss": round(p_loss, 2), "Статус": "OPEN"
+                    "RR": round(rr_val, 2), "Result": f"+{p_profit:.2f} / -{p_loss:.2f}",
+                    "Статус": "OPEN"
                 })
-                st.rerun()
+                st.rerun() # Поля очистятся сами
+            else:
+                st.error("Заполни всё!")
 
     tab1, tab2 = st.tabs(["🕯 График", "📑 Журнал сделок"])
 
     with tab1:
         c1, c2 = st.columns([1, 3])
-        active_coin = c1.text_input("Тикер", "BTC", key="m_t").upper()
+        active_coin = c1.text_input("Тикер", "BTC", key="main_coin").upper()
         active_tf = c2.select_slider("Таймфрейм", options=["5m", "15m", "1h", "4h", "1d"], value="15m")
         df = get_crypto_data(active_coin, active_tf)
         if df is not None:
             price_now = df['close'].iloc[-1]
-            st.metric(f"{active_coin}/USDT (LIVE)", f"${price_now:,.2f}")
-            
-            # Проверяем статусы всех сделок по текущей цене
+            st.metric(f"{active_coin}/USDT (LIVE)", f"${price_now:,.2f}", delta=f"Депо: {st.session_state.deposit}$")
             check_trade_logic(st.session_state.trades, price_now)
             
             fig = go.Figure(data=[go.Candlestick(x=df['time'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], increasing_line_color='#26a69a', decreasing_line_color='#ef5350')])
@@ -119,13 +115,13 @@ else:
         if not st.session_state.trades:
             st.info("Журнал пуст")
         else:
-            # Вернул графу СТАТУС
-            cols = st.columns([1.2, 0.7, 0.7, 0.8, 1, 1, 1, 0.6, 1.2, 1.3, 0.6])
-            headers = ["Время", "Тип", "Монета", "Кол-во", "Вход", "Стоп", "Тейк", "RR", "P/L ($)", "Статус", "Del"]
+            # Создаем таблицу вручную для индивидуальных кнопок удаления
+            cols = st.columns([1.2, 0.7, 0.7, 0.8, 1, 1, 1, 0.6, 1.4, 1.3, 0.6])
+            headers = ["Время", "Тип", "Монета", "Кол-во", "Вход", "Стоп", "Тейк", "RR", "P/L ($)", "Статус", "🗑️"]
             for col, h in zip(cols, headers): col.write(f"**{h}**")
             
             for trade in reversed(st.session_state.trades):
-                c = st.columns([1.2, 0.7, 0.7, 0.8, 1, 1, 1, 0.6, 1.2, 1.3, 0.6])
+                c = st.columns([1.2, 0.7, 0.7, 0.8, 1, 1, 1, 0.6, 1.4, 1.3, 0.6])
                 c[0].write(trade["Время"])
                 c[1].write(trade["Тип"])
                 c[2].write(trade["Монета"])
@@ -134,13 +130,10 @@ else:
                 c[5].write(str(trade["Стоп"]))
                 c[6].write(str(trade["Тейк"]))
                 c[7].write(str(trade["RR"]))
-                c[8].write(f"+{trade['Profit']}$ / -{trade['Loss']}$")
+                c[8].write(trade["Result"])
                 
-                # Отображение статуса
                 status = trade["Статус"]
-                if "TAKE" in status: color = "green"
-                elif "STOP" in status: color = "red"
-                else: color = "white"
+                color = "green" if "TAKE" in status else "red" if "STOP" in status else "white"
                 c[9].markdown(f":{color}[{status}]")
                 
                 if c[10].button("🗑️", key=f"del_{trade['id']}"):
