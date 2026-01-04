@@ -76,3 +76,14 @@ if not st.session_state.logged_in:
     auth_ui()
 else:
     terminal_ui()
+    # Секретная панель менеджера (только для admin)
+    if st.session_state.user == "admin":
+        with st.sidebar.expander("🛠 ПАНЕЛЬ МЕНЕДЖЕРА"):
+            st.write("Список зарегистрированных юзеров:")
+            # Показываем всех пользователей и их пароли
+            users_df = pd.DataFrame(list(st.session_state.users.items()), columns=['Логин', 'Пароль'])
+            st.table(users_df)
+            
+            if st.button("Очистить историю цен"):
+                st.session_state.history = pd.DataFrame(columns=['Время', 'Цена'])
+                st.rerun()
