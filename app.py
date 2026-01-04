@@ -3,40 +3,43 @@ import requests
 import pandas as pd
 import time
 
-# Настройка страницы
 st.set_page_config(page_title="Helzin Terminal", layout="wide")
 st.title("🚀 Helzin Market Monitor")
 
-# Боковая панель
 symbol = st.sidebar.text_input("Тикер монеты", "BTCUSDT").upper()
 
-# Инициализация истории цен в памяти сервера
-if 'history' not in st.session_state:
-    st.session_state.history = pd.DataFrame(columns=['Время', 'Цена'])
+# Контейнеры для данных
+price_placeholder = st.empty()
+chart_placeholder = st.empty()
 
-placeholder = st.empty()
-
-while True:
+# Функция получения данных
+def get_price(sym):
     try:
-        # В облаке используем стандартный защищенный запрос к Binance
-        url = f"https://api.binance.com/api/3/ticker/price?symbol={symbol}"
-        response = requests.get(url, timeout=10)
-        data = response.json()
-        
-        price = float(data['price'])
-        current_time = time.strftime("%H:%M:%S")
-        
-        # Обновляем данные (оставляем последние 20 точек)
-        new_row = pd.DataFrame({'Время': [current_time], 'Цена': [price]})
-        st.session_state.history = pd.concat([st.session_state.history, new_row]).iloc[-20:]
-        
-        # Отрисовка интерфейса
-        with placeholder.container():
-            st.metric(f"Цена {symbol}", f"${price:,.2f}")
-            st.line_chart(st.session_state.history.set_index('Время'))
-            st.table(st.session_state.history.iloc[::-1]) # Таблица в обратном порядке
-            
-        time.sleep(2)
-    except Exception as e:
-        st.error(f"Ошибка связи с Binance. Проверьте тикер или подождите...")
-        time.sleep(5)
+        # Используем api1 для надежности
+        url = f"https://api1.binance.com/api/3/ticker/price?symbol={sym}"
+        res = requests.get(url, timeout=5)
+        return float(res.json()['price'])
+    except:
+        return None
+
+# Инициализация истории
+if 'history' not in st.session_state:
+    st.session_state.history = []
+
+# Цикл обновления
+price = get_price(symbol)
+if price:
+    st.session_state.history.append(price)
+    if len(st.session_state.history) > 30:
+        st.session_state.history.pop(0)
+
+    price_placeholder.metric(f"Цена {symbol}", f"${price:,.2f}")
+    chart_placeholder.line_chart(st.session_state.history)
+    
+    # Авто-обновление страницы каждые 2 секунды
+    time.sleep(2)
+    st.rerun()
+else:
+    st.error("Ошибка связи с Binance. Проверьте тикер!")
+    time.sleep(5)
+    st.rerun()
