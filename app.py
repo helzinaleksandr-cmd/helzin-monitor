@@ -2,10 +2,10 @@ import streamlit as st
 import requests
 import pandas as pd
 import plotly.graph_objects as go
-from datetime import datetime, timedelta
+from datetime import datetime
 import time
 
-# --- НАСТРОЙКИ ---
+# --- 1. НАСТРОЙКИ И ПАМЯТЬ ---
 st.set_page_config(page_title="Helzin Terminal Pro", layout="wide")
 
 if 'trades' not in st.session_state: st.session_state.trades = []
@@ -28,135 +28,163 @@ def get_crypto_data(symbol, tf):
     except: return None, 0.0
     return None, 0.0
 
-# --- САЙДБАР ---
+# --- 2. САЙДБАР (АДМИН-ПАНЕЛЬ) ---
 with st.sidebar:
     st.title("👤 Helzin Admin")
-    st.session_state.balance = st.number_input("Депозит ($)", value=float(st.session_state.balance))
+    st.session_state.balance = st.number_input("Начальный Депозит ($)", min_value=0.0, value=float(st.session_state.balance))
     st.divider()
+    st.subheader("➕ Открыть позицию")
     with st.form("trade_form", clear_on_submit=True):
-        side = st.radio("Тип", ["LONG", "SHORT"], horizontal=True)
-        new_coin = st.text_input("Монета", "BTC").upper()
-        entry = st.number_input("Цена входа", value=None)
-        qty = st.number_input("Кол-во", value=None, step=0.0001)
-        sl = st.number_input("Стоп", value=None)
-        tp = st.number_input("Тейк", value=None)
-        img_entry = st.file_uploader("🖼 Скриншот (ВХОД)", type=['png', 'jpg'])
-        if st.form_submit_button("ОТКРЫТЬ ПОЗИЦИЮ", use_container_width=True):
+        side = st.radio("Тип сделки", ["LONG", "SHORT"], horizontal=True)
+        new_coin = st.text_input("Монета (напр. SOL)", "BTC").upper()
+        entry = st.number_input("Цена входа", value=None, placeholder="0.0")
+        qty = st.number_input("Кол-во монет", value=None, placeholder="0.0", step=0.0001)
+        sl = st.number_input("Стоп-лосс (SL)", value=None, placeholder="0.0")
+        tp = st.number_input("Тейк-профит (TP)", value=None, placeholder="0.0")
+        
+        if st.form_submit_button("ОТКРЫТЬ СДЕЛКУ", use_container_width=True):
             if entry and qty:
+                risk = abs(entry - (sl if sl else entry))
+                reward = abs((tp if tp else entry) - entry)
                 st.session_state.trades.append({
-                    "id": time.time(), "time": datetime.now(),
-                    "coin": new_coin, "side": side, "entry": float(entry),
-                    "qty": float(qty), "sl": float(sl) if sl else 0.0, 
-                    "tp": float(tp) if tp else 0.0, "status": "В процессе ⏳", 
-                    "final_pnl": None, "img_entry": img_entry, "img_exit": None
+                    "id": time.time(), 
+                    "time": datetime.now().strftime("%H:%M:%S"),
+                    "coin": new_coin, 
+                    "side": side, 
+                    "entry": float(entry),
+                    "qty": float(qty), 
+                    "sl": float(sl) if sl else 0.0, 
+                    "tp": float(tp) if tp else 0.0, 
+                    "rr": round(reward/risk, 2) if risk > 0 else 0.0, 
+                    "status": "В процессе ⏳", 
+                    "final_pnl": None 
                 })
                 st.rerun()
 
-# --- ДВИЖОК ОБНОВЛЕНИЯ ---
+# --- 3. ОСНОВНОЙ ТЕРМИНАЛ (ОБНОВЛЕНИЕ 5 СЕК) ---
 @st.fragment(run_every=5)
 def terminal_engine():
+    # Получаем актуальную цену
     df, cur_p = get_crypto_data(st.session_state.ticker, st.session_state.tf)
     if cur_p > 0: st.session_state.price = cur_p
 
+    # Логика автоматического закрытия и расчет PnL
     total_closed_pnl = 0.0
-    closed_trades_data = [] # Список для графика доходности
+    pnl_history = [st.session_state.balance]
     
     for trade in st.session_state.trades:
+        # Если сделка активна — проверяем цену
         if "⏳" in trade["status"]:
+            # Если монета сделки совпадает с графиком — берем цену графика, иначе тянем отдельно
             p_check = cur_p if trade["coin"] == st.session_state.ticker else get_crypto_data(trade["coin"], "5m")[1]
+            
             if p_check > 0:
                 is_closed = False
-                res = (p_check - trade["entry"]) * trade["qty"] if trade["side"] == "LONG" else (trade["entry"] - p_check) * trade["qty"]
+                current_res = (p_check - trade["entry"]) * trade["qty"] if trade["side"] == "LONG" else (trade["entry"] - p_check) * trade["qty"]
+                
+                # Проверка SL/TP
                 if trade["side"] == "LONG":
                     if trade["tp"] > 0 and p_check >= trade["tp"]: trade["status"] = "Тейк ✅"; is_closed = True
                     elif trade["sl"] > 0 and p_check <= trade["sl"]: trade["status"] = "Стоп ❌"; is_closed = True
                 else:
                     if trade["tp"] > 0 and p_check <= trade["tp"]: trade["status"] = "Тейк ✅"; is_closed = True
                     elif trade["sl"] > 0 and p_check >= trade["sl"]: trade["status"] = "Стоп ❌"; is_closed = True
-                if is_closed: 
-                    trade["final_pnl"] = res
-                    trade["close_time"] = datetime.now() # Записываем время закрытия
-        
+                
+                if is_closed: trade["final_pnl"] = current_res
+
+        # Суммируем закрытый профит для кривой доходности
         if trade["final_pnl"] is not None:
             total_closed_pnl += trade["final_pnl"]
-            closed_trades_data.append({
-                "time": trade.get("close_time", trade["time"]),
-                "pnl": trade["final_pnl"]
-            })
+            pnl_history.append(st.session_state.balance + total_closed_pnl)
 
-    t_trade, t_journal = st.tabs(["🕯 ТОРГОВЛЯ", "📓 ЖУРНАЛ И РАЗБОР"])
+    # --- ВИЗУАЛ (ВКЛАДКИ) ---
+    tab_trade, tab_journal = st.tabs(["🕯 ТОРГОВЛЯ", "📓 ЖУРНАЛ СДЕЛОК"])
 
-    with t_trade:
-        # Панель параметров
+    with tab_trade:
+        # Панель инструментов
         c1, c2, c3 = st.columns([1, 1, 2.5])
         with c1: 
-            t_in = st.text_input("Тикер", value=st.session_state.ticker).upper(); st.session_state.ticker = t_in
-        with c2: st.selectbox("Биржа", ["Binance"])
+            t_in = st.text_input("Тикер", value=st.session_state.ticker).upper()
+            if t_in != st.session_state.ticker: st.session_state.ticker = t_in; st.rerun()
+        with c2: st.selectbox("Биржа", ["Binance (Spot)"])
         with c3:
             st.write("Таймфрейм")
-            cols = st.columns(5)
+            t_cols = st.columns(5)
             for i, t in enumerate(["5m", "15m", "1h", "4h", "1d"]):
-                if cols[i].button(t, key=f"tf_{t}", type="primary" if st.session_state.tf == t else "secondary"):
+                if t_cols[i].button(t, key=f"tf_{t}", type="primary" if st.session_state.tf == t else "secondary"):
                     st.session_state.tf = t; st.rerun()
 
+        # Метрики
         m1, m2, m3 = st.columns(3)
         m1.metric(f"Цена {st.session_state.ticker}", f"${st.session_state.price:,.2f}")
         m2.metric("Баланс + Профит", f"${(st.session_state.balance + total_closed_pnl):,.2f}", f"{total_closed_pnl:+.2f}$")
-        m3.metric("Активных", len([t for t in st.session_state.trades if "⏳" in t["status"]]))
+        m3.metric("В рынке", len([t for t in st.session_state.trades if "⏳" in t["status"]]))
 
+        # ГЛАВНЫЙ ГРАФИК
         if df is not None:
-            fig = go.Figure(data=[go.Candlestick(x=df['time'], open=df['open'], high=df['high'], low=df['low'], close=df['close'])])
-            fig.update_layout(template="plotly_dark", height=400, margin=dict(l=0, r=50, t=10, b=10), yaxis=dict(side="right"))
-            st.plotly_chart(fig, use_container_width=True)
+            fig_chart = go.Figure(data=[go.Candlestick(x=df['time'], open=df['open'], high=df['high'], low=df['low'], close=df['close'])])
+            fig_chart.update_layout(
+                template="plotly_dark", height=450, xaxis_rangeslider_visible=False,
+                margin=dict(l=0, r=50, t=0, b=0),
+                yaxis=dict(side="right", tickformat="$.2f") # Цена справа
+            )
+            fig_chart.add_hline(y=st.session_state.price, line_dash="dash", line_color="yellow")
+            st.plotly_chart(fig_chart, use_container_width=True)
 
-        # --- БЛОК КРИВОЙ ДОХОДНОСТИ С ФИЛЬТРАМИ ---
-        st.divider()
-        st.subheader("📊 Аналитика доходности")
-        
-        p_col1, p_col2 = st.columns([2, 1])
-        with p_col1:
-            period = st.radio("Период", ["День", "7 Дней", "Месяц", "Год", "Все время"], horizontal=True)
-        with p_col2:
-            chart_type = st.selectbox("Вид графика", ["Линия (Equity)", "Столбцы (PnL per trade)"])
+        # КРИВАЯ ДОХОДНОСТИ (Equity)
+        st.subheader("📈 Динамика счета (PnL)")
+        fig_pnl = go.Figure(go.Scatter(y=pnl_history, mode='lines+markers', line=dict(color='#00FFCC', width=3), fill='tozeroy'))
+        fig_pnl.update_layout(
+            template="plotly_dark", height=200, margin=dict(l=0, r=50, t=10, b=10),
+            yaxis=dict(side="right"), xaxis=dict(title="Сделки по порядку")
+        )
+        st.plotly_chart(fig_pnl, use_container_width=True)
 
-        # Фильтрация данных
-        now = datetime.now()
-        if period == "День": start_date = now - timedelta(days=1)
-        elif period == "7 Дней": start_date = now - timedelta(days=7)
-        elif period == "Месяц": start_date = now - timedelta(days=30)
-        elif period == "Год": start_date = now - timedelta(days=365)
-        else: start_date = datetime(2000, 1, 1)
-
-        filtered_data = [d for d in closed_trades_data if d["time"] >= start_date]
-        
-        if filtered_data:
-            y_values = []
-            current_equity = st.session_state.balance
-            # Для линии считаем накопление, для столбцов - чистый pnl
-            if chart_type == "Линия (Equity)":
-                y_values = [current_equity]
-                for d in filtered_data:
-                    current_equity += d["pnl"]
-                    y_values.append(current_equity)
-                fig_p = go.Figure(go.Scatter(y=y_values, mode='lines+markers', line=dict(color='#00FFCC', width=3), fill='tozeroy'))
-            else:
-                pnls = [d["pnl"] for d in filtered_data]
-                colors = ['#00FFCC' if p >= 0 else '#FF4B4B' for p in pnls]
-                fig_p = go.Figure(go.Bar(y=pnls, marker_color=colors))
-
-            fig_p.update_layout(template="plotly_dark", height=250, margin=dict(l=0, r=50, t=10, b=10), yaxis=dict(side="right"))
-            st.plotly_chart(fig_p, use_container_width=True)
+    with tab_journal:
+        st.subheader("📓 История и управление сделками")
+        if st.session_state.trades:
+            # Сетка таблицы
+            h = st.columns([1, 0.8, 0.6, 0.8, 0.8, 0.8, 0.8, 0.5, 1, 1, 1, 0.4])
+            names = ["Время", "Актив", "Тип", "Кол-во", "Вход", "Стоп", "Тейк", "RR", "PnL ($)", "Статус", "Действие", ""]
+            for col, n in zip(h, names): col.markdown(f"**{n}**")
+            
+            for i, trade in enumerate(st.session_state.trades):
+                # Расчет текущего PnL для отображения в таблице
+                if trade["final_pnl"] is not None:
+                    p_disp = trade["final_pnl"]
+                else:
+                    p_curr = st.session_state.price if trade["coin"] == st.session_state.ticker else get_crypto_data(trade["coin"], "5m")[1]
+                    p_disp = (p_curr - trade["entry"]) * trade["qty"] if trade["side"] == "LONG" else (trade["entry"] - p_curr) * trade["qty"]
+                
+                cols = st.columns([1, 0.8, 0.6, 0.8, 0.8, 0.8, 0.8, 0.5, 1, 1, 1, 0.4])
+                cols[0].write(trade["time"])
+                cols[1].write(trade["coin"])
+                cols[2].write(trade["side"])
+                cols[3].write(f"{trade['qty']}")
+                cols[4].write(f"{trade['entry']:,.2f}")
+                cols[5].write(f"{trade['sl']:,.2f}")
+                cols[6].write(f"{trade['tp']:,.2f}")
+                cols[7].write(f"{trade['rr']}")
+                
+                p_color = "🟢" if p_disp >= 0 else "🔴"
+                cols[8].write(f"{p_color} ${p_disp:.2f}")
+                cols[9].write(trade["status"])
+                
+                # КНОПКА ЗАКРЫТИЯ (ДЛЯ АКТИВНЫХ)
+                if "⏳" in trade["status"]:
+                    if cols[10].button("ЗАКРЫТЬ", key=f"cl_{trade['id']}", type="primary"):
+                        trade["final_pnl"] = p_disp
+                        trade["status"] = "Ручное ✋"
+                        st.rerun()
+                else:
+                    cols[10].write("Закрыта")
+                
+                # УДАЛЕНИЕ
+                if cols[11].button("🗑️", key=f"del_{trade['id']}"):
+                    st.session_state.trades.pop(i)
+                    st.rerun()
         else:
-            st.info("Нет закрытых сделок за выбранный период")
+            st.info("Журнал пуст. Откройте сделку в сайдбаре.")
 
-    with t_journal:
-        # (Тут остается твой журнал с Expanders и скриншотами)
-        st.subheader("📓 История сделок")
-        for i, trade in enumerate(st.session_state.trades):
-            with st.expander(f"{trade['time'].strftime('%H:%M:%S')} | {trade['coin']} | PnL: {trade['final_pnl'] if trade['final_pnl'] else '...'} | {trade['status']}"):
-                # Внутрянка экспандера как в прошлом коде...
-                st.write(f"Вход: {trade['entry']} | Скрин входа есть" if trade['img_entry'] else "Скрин входа нет")
-                if st.button("Удалить", key=f"del_{trade['id']}"):
-                    st.session_state.trades.pop(i); st.rerun()
-
+# ЗАПУСК
 terminal_engine()
