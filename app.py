@@ -24,7 +24,7 @@ while True:
         url = f"https://api3.binance.com/api/3/ticker/price?symbol={symbol}"
         response = requests.get(url, headers=headers, timeout=10)
         
-       if response.status_code == 200:
+      if response.status_code == 200:
             data = response.json()
             price = float(data['price'])
             
