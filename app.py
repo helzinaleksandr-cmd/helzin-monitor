@@ -3,8 +3,12 @@ import requests
 import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime
+from streamlit_autorefresh import st_autorefresh # Не забудь: pip install streamlit-autorefresh
 
 st.set_page_config(page_title="Helzin Trading Terminal", layout="wide")
+
+# Автообновление каждую 1 секунду
+st_autorefresh(interval=1000, key="datarefresh")
 
 # Инициализация сессии
 if 'logged_in' not in st.session_state:
@@ -26,6 +30,21 @@ def get_crypto_data(ticker, tf):
         return df
     except:
         return None
+
+# Функция проверки статуса сделок
+def check_trade_logic(trades, current_price):
+    for trade in trades:
+        if trade['Статус'] == "OPEN":
+            if trade['Тип'] == "LONG":
+                if current_price >= trade['Тейк']:
+                    trade['Статус'] = "✅ TAKE PROFIT"
+                elif current_price <= trade['Стоп']:
+                    trade['Статус'] = "❌ STOP LOSS"
+            else: # SHORT
+                if current_price <= trade['Тейк']:
+                    trade['Статус'] = "✅ TAKE PROFIT"
+                elif current_price >= trade['Стоп']:
+                    trade['Статус'] = "❌ STOP LOSS"
 
 if not st.session_state.logged_in:
     st.title("🔐 Helzin Terminal")
@@ -54,42 +73,29 @@ else:
         t_stop = st.number_input("Уровень СТОП", value=None, placeholder="0.00", format="%.2f", key="sl")
         t_take = st.number_input("Уровень ТЕЙК", value=None, placeholder="0.00", format="%.2f", key="tp")
         
-        # Расчет RR и P/L
-        rr_val = 0.0
-        potential_profit = 0.0
-        potential_loss = 0.0
-        
+        rr_val, p_profit, p_loss = 0.0, 0.0, 0.0
         if t_entry and t_stop and t_take and t_amount:
             if t_side == "LONG":
-                risk_per_coin = t_entry - t_stop
-                reward_per_coin = t_take - t_entry
+                risk_pc, reward_pc = t_entry - t_stop, t_take - t_entry
             else:
-                risk_per_coin = t_stop - t_entry
-                reward_per_coin = t_entry - t_take
+                risk_pc, reward_pc = t_stop - t_entry, t_entry - t_take
             
-            potential_profit = reward_per_coin * t_amount
-            potential_loss = risk_per_coin * t_amount
-            
-            if risk_per_coin > 0:
-                rr_val = reward_per_coin / risk_per_coin
-                st.info(f"📊 RR: 1 к {rr_val:.2f} | Риск: -{potential_loss:.2f}$ | Тейк: +{potential_profit:.2f}$")
+            p_profit, p_loss = reward_pc * t_amount, risk_pc * t_amount
+            if risk_pc > 0:
+                rr_val = reward_pc / risk_pc
+                st.info(f"📊 RR: 1 к {rr_val:.2f} | Риск: -{p_loss:.2f}$ | Тейк: +{p_profit:.2f}$")
 
         if st.button("ОТКРЫТЬ ПОЗИЦИЮ", use_container_width=True):
             if t_stop and t_take and t_amount:
-                new_trade = {
+                st.session_state.trades.append({
                     "id": datetime.now().timestamp(),
                     "Время": datetime.now().strftime("%H:%M:%S"),
                     "Тип": t_side, "Монета": t_coin, "Кол-во": t_amount,
                     "Вход": t_entry, "Стоп": t_stop, "Тейк": t_take, 
-                    "RR": round(rr_val, 2),
-                    "Profit": round(potential_profit, 2),
-                    "Loss": round(potential_loss, 2),
-                    "Статус": "OPEN"
-                }
-                st.session_state.trades.append(new_trade)
+                    "RR": round(rr_val, 2), "Profit": round(p_profit, 2), 
+                    "Loss": round(p_loss, 2), "Статус": "OPEN"
+                })
                 st.rerun()
-            else:
-                st.error("Заполни все поля!")
 
     tab1, tab2 = st.tabs(["🕯 График", "📑 Журнал сделок"])
 
@@ -99,25 +105,27 @@ else:
         active_tf = c2.select_slider("Таймфрейм", options=["5m", "15m", "1h", "4h", "1d"], value="15m")
         df = get_crypto_data(active_coin, active_tf)
         if df is not None:
-            st.metric(f"{active_coin}/USDT", f"${df['close'].iloc[-1]:,.2f}")
+            price_now = df['close'].iloc[-1]
+            st.metric(f"{active_coin}/USDT (LIVE)", f"${price_now:,.2f}")
+            
+            # Проверяем статусы всех сделок по текущей цене
+            check_trade_logic(st.session_state.trades, price_now)
+            
             fig = go.Figure(data=[go.Candlestick(x=df['time'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], increasing_line_color='#26a69a', decreasing_line_color='#ef5350')])
-            fig.update_layout(template="plotly_dark", height=500, xaxis_rangeslider_visible=False)
+            fig.update_layout(template="plotly_dark", height=500, xaxis_rangeslider_visible=False, margin=dict(l=0, r=0, t=0, b=0))
             st.plotly_chart(fig, use_container_width=True)
-            if st.button("🔄 Обновить данные", use_container_width=True):
-                st.rerun()
 
     with tab2:
         if not st.session_state.trades:
             st.info("Журнал пуст")
         else:
-            # Обновленная таблица с профитом
-            cols = st.columns([1.2, 0.8, 0.8, 1, 1, 1, 1, 0.8, 1.2, 0.8])
-            headers = ["Время", "Тип", "Монета", "Кол-во", "Вход", "Стоп", "Тейк", "RR", "P/L ($)", "Удалить"]
-            for col, h in zip(cols, headers):
-                col.write(f"**{h}**")
+            # Вернул графу СТАТУС
+            cols = st.columns([1.2, 0.7, 0.7, 0.8, 1, 1, 1, 0.6, 1.2, 1.3, 0.6])
+            headers = ["Время", "Тип", "Монета", "Кол-во", "Вход", "Стоп", "Тейк", "RR", "P/L ($)", "Статус", "Del"]
+            for col, h in zip(cols, headers): col.write(f"**{h}**")
             
             for trade in reversed(st.session_state.trades):
-                c = st.columns([1.2, 0.8, 0.8, 1, 1, 1, 1, 0.8, 1.2, 0.8])
+                c = st.columns([1.2, 0.7, 0.7, 0.8, 1, 1, 1, 0.6, 1.2, 1.3, 0.6])
                 c[0].write(trade["Время"])
                 c[1].write(trade["Тип"])
                 c[2].write(trade["Монета"])
@@ -126,11 +134,15 @@ else:
                 c[5].write(str(trade["Стоп"]))
                 c[6].write(str(trade["Тейк"]))
                 c[7].write(str(trade["RR"]))
+                c[8].write(f"+{trade['Profit']}$ / -{trade['Loss']}$")
                 
-                # Показываем прибыль и убыток в одной колонке
-                pl_text = f"+{trade['Profit']}$ / -{trade['Loss']}$"
-                c[8].write(pl_text)
+                # Отображение статуса
+                status = trade["Статус"]
+                if "TAKE" in status: color = "green"
+                elif "STOP" in status: color = "red"
+                else: color = "white"
+                c[9].markdown(f":{color}[{status}]")
                 
-                if c[9].button("🗑️", key=f"del_{trade['id']}"):
+                if c[10].button("🗑️", key=f"del_{trade['id']}"):
                     st.session_state.trades = [t for t in st.session_state.trades if t['id'] != trade['id']]
                     st.rerun()
