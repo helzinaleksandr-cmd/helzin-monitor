@@ -18,7 +18,6 @@ def get_crypto_data(symbol, tf):
     ag = {"5m": 5, "15m": 15, "1h": 1, "4h": 4, "1d": 1}
     suffix = "histominute" if "m" in tf else "histohour" if "h" in tf else "histoday"
     
-    # Авто-разделение для пар типа BTCUSDT или BTCUSDC
     if "USDC" in symbol: fsym, tsym = symbol.replace("USDC", ""), "USDC"
     else: fsym, tsym = symbol.replace("USDT", ""), "USDT"
 
@@ -41,20 +40,26 @@ with st.sidebar:
     st.subheader("➕ Открыть позицию")
     with st.form("trade_form", clear_on_submit=True):
         side = st.radio("Тип сделки", ["LONG", "SHORT"], horizontal=True)
-        new_coin = st.text_input("Котировка (напр. BTCUSDT)", value=st.session_state.ticker).upper()
-        entry = st.number_input("Цена входа", value=0.0, format="%.4f")
+        new_coin = st.text_input("Котировка", value=st.session_state.ticker).upper()
+        entry = st.number_input("Цена входа", value=0.0, format="%.2f")
         qty = st.number_input("Кол-во монет", value=0.0, step=0.0001, format="%.4f")
-        sl = st.number_input("Стоп-лосс (SL)", value=0.0, format="%.4f")
-        tp = st.number_input("Тейк-профит (TP)", value=0.0, format="%.4f")
+        sl = st.number_input("Стоп-лосс (SL)", value=0.0, format="%.2f")
+        tp = st.number_input("Тейк-профит (TP)", value=0.0, format="%.2f")
         
         if st.form_submit_button("ОТКРЫТЬ СДЕЛКУ", use_container_width=True):
             if entry > 0 and qty > 0:
+                # Расчет RR
+                risk = abs(entry - sl) if sl > 0 else 0
+                reward = abs(tp - entry) if tp > 0 else 0
+                rr_val = round(reward/risk, 2) if risk > 0 else 0
+                
                 st.session_state.trades.append({
                     "id": time.time(), 
                     "raw_time": datetime.now(),
                     "time": datetime.now().strftime("%H:%M:%S"),
                     "coin": new_coin, "side": side, "entry": float(entry),
                     "qty": float(qty), "sl": float(sl), "tp": float(tp),
+                    "rr": rr_val,
                     "status": "В процессе ⏳", "final_pnl": None 
                 })
                 st.rerun()
@@ -65,7 +70,7 @@ def terminal_engine():
     df, cur_p = get_crypto_data(st.session_state.ticker, st.session_state.tf)
     if cur_p > 0: st.session_state.price = cur_p
 
-    total_pnl = 0.0
+    total_closed_pnl = 0.0
     closed_data = []
     
     for trade in st.session_state.trades:
@@ -73,7 +78,6 @@ def terminal_engine():
             p_check = cur_p if trade["coin"] == st.session_state.ticker else get_crypto_data(trade["coin"], "5m")[1]
             if p_check > 0:
                 res = (p_check - trade["entry"]) * trade["qty"] if trade["side"] == "LONG" else (trade["entry"] - p_check) * trade["qty"]
-                # Авто-клоуз
                 if trade["side"] == "LONG":
                     if trade["tp"] > 0 and p_check >= trade["tp"]: trade["status"], trade["final_pnl"] = "Тейк ✅", res
                     elif trade["sl"] > 0 and p_check <= trade["sl"]: trade["status"], trade["final_pnl"] = "Стоп ❌", res
@@ -82,21 +86,29 @@ def terminal_engine():
                     elif trade["sl"] > 0 and p_check >= trade["sl"]: trade["status"], trade["final_pnl"] = "Стоп ❌", res
 
         if trade["final_pnl"] is not None:
-            total_pnl += trade["final_pnl"]
+            total_closed_pnl += trade["final_pnl"]
             closed_data.append({"t": trade["raw_time"], "v": trade["final_pnl"]})
 
     t_trade, t_journal = st.tabs(["🕯 ТОРГОВЛЯ", "📓 ЖУРНАЛ И ЭКСПОРТ"])
 
     with t_trade:
-        c1, c2, c3 = st.columns([1.5, 1, 2])
-        with c1:
+        # ВЕРНУЛИ МЕТРИКИ (Депозит и Профит)
+        c_p1, c_p2, c_p3 = st.columns([1.5, 1.5, 2])
+        with c_p1:
             tin = st.text_input("Пара", value=st.session_state.ticker).upper()
             if tin != st.session_state.ticker: st.session_state.ticker = tin; st.rerun()
-        with c2: st.write(f"## ${st.session_state.price:,.2f}")
-        with c3:
+        with c_p2:
+            st.metric("Баланс + PnL", f"${(st.session_state.balance + total_closed_pnl):,.2f}")
+        with c_p3:
+            st.metric("Чистый Профит", f"${total_closed_pnl:,.2f}", delta=f"{total_closed_pnl:+.2f}")
+
+        # Цена и Таймфреймы
+        c_h1, c_h2 = st.columns([1, 2])
+        c_h1.write(f"## ${st.session_state.price:,.2f}")
+        with c_h2:
             tcols = st.columns(5)
             for i, t in enumerate(["5m", "15m", "1h", "4h", "1d"]):
-                if tcols[i].button(t, type="primary" if st.session_state.tf == t else "secondary"):
+                if tcols[i].button(t, key=f"btn_{t}", type="primary" if st.session_state.tf == t else "secondary"):
                     st.session_state.tf = t; st.rerun()
 
         if df is not None:
@@ -106,7 +118,6 @@ def terminal_engine():
 
         st.subheader("📈 Аналитика PnL")
         period = st.radio("Период", ["День", "7 Дней", "Месяц", "Все"], horizontal=True)
-        # Фильтр периодов
         limit = datetime.now() - (timedelta(days=1) if period=="День" else timedelta(days=7) if period=="7 Дней" else timedelta(days=30) if period=="Месяц" else timedelta(days=365))
         pts = [st.session_state.balance]
         for d in [x for x in closed_data if x['t'] > limit]: pts.append(pts[-1] + d['v'])
@@ -118,29 +129,31 @@ def terminal_engine():
     with t_journal:
         if st.session_state.trades:
             csv = pd.DataFrame(st.session_state.trades).to_csv(index=False).encode('utf-8-sig')
-            st.download_button("📥 СКАЧАТЬ CSV (Для Excel)", data=csv, file_name="trades.csv", mime="text/csv")
+            st.download_button("📥 СКАЧАТЬ CSV", data=csv, file_name="trades.csv", mime="text/csv")
             
-            # Табличный вид как в начале
-            cols = st.columns([1, 1, 0.7, 1, 1, 1, 1, 0.8])
-            titles = ["Время", "Пара", "Тип", "Вход", "PnL", "Статус", "Управление", ""]
+            # ВЕРНУЛИ ВСЕ КОЛОНКИ: Вход, Стоп, RR
+            cols = st.columns([1, 1, 0.6, 1, 1, 1, 0.5, 1, 1, 0.5])
+            titles = ["Время", "Пара", "Тип", "Вход", "Стоп/Тейк", "PnL", "RR", "Статус", "Управление", ""]
             for col, t in zip(cols, titles): col.markdown(f"**{t}**")
             
             for i, tr in enumerate(st.session_state.trades):
                 p_curr = st.session_state.price if tr["coin"] == st.session_state.ticker else get_crypto_data(tr["coin"], "5m")[1]
                 p_now = tr["final_pnl"] if tr["final_pnl"] is not None else (p_curr - tr["entry"]) * tr["qty"] * (1 if tr["side"] == "LONG" else -1)
                 
-                c = st.columns([1, 1, 0.7, 1, 1, 1, 1, 0.8])
+                c = st.columns([1, 1, 0.6, 1, 1, 1, 0.5, 1, 1, 0.5])
                 c[0].write(tr["time"])
                 c[1].write(tr["coin"])
                 c[2].write(tr["side"])
-                c[3].write(f"{tr['entry']:.2f}")
-                c[4].write(f"{'🟢' if p_now>=0 else '🔴'} ${p_now:.2f}")
-                c[5].write(tr["status"])
+                c[3].write(f"{tr['entry']:,.2f}")
+                c[4].write(f"{tr['sl']:,.0f} / {tr['tp']:,.0f}")
+                c[5].write(f"{'🟢' if p_now>=0 else '🔴'} ${p_now:.2f}")
+                c[6].write(f"{tr.get('rr', 0)}")
+                c[7].write(tr["status"])
                 if "⏳" in tr["status"]:
-                    if c[6].button("ЗАКРЫТЬ", key=f"c_{tr['id']}"):
+                    if c[8].button("ЗАКРЫТЬ", key=f"c_{tr['id']}"):
                         tr["final_pnl"], tr["status"] = p_now, "Ручное ✋"
                         st.rerun()
-                if c[7].button("🗑️", key=f"d_{tr['id']}"):
+                if c[9].button("🗑️", key=f"d_{tr['id']}"):
                     st.session_state.trades.pop(i); st.rerun()
 
 terminal_engine()
