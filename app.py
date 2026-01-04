@@ -97,4 +97,40 @@ else:
         c1, c2 = st.columns([1, 3])
         active_coin = c1.text_input("Тикер", "BTC", key="m_t").upper()
         active_tf = c2.select_slider("Таймфрейм", options=["5m", "15m", "1h", "4h", "1d"], value="15m")
-        df =
+        df = get_crypto_data(active_coin, active_tf)
+        if df is not None:
+            st.metric(f"{active_coin}/USDT", f"${df['close'].iloc[-1]:,.2f}")
+            fig = go.Figure(data=[go.Candlestick(x=df['time'], open=df['open'], high=df['high'], low=df['low'], close=df['close'], increasing_line_color='#26a69a', decreasing_line_color='#ef5350')])
+            fig.update_layout(template="plotly_dark", height=500, xaxis_rangeslider_visible=False)
+            st.plotly_chart(fig, use_container_width=True)
+            if st.button("🔄 Обновить данные", use_container_width=True):
+                st.rerun()
+
+    with tab2:
+        if not st.session_state.trades:
+            st.info("Журнал пуст")
+        else:
+            # Обновленная таблица с профитом
+            cols = st.columns([1.2, 0.8, 0.8, 1, 1, 1, 1, 0.8, 1.2, 0.8])
+            headers = ["Время", "Тип", "Монета", "Кол-во", "Вход", "Стоп", "Тейк", "RR", "P/L ($)", "Удалить"]
+            for col, h in zip(cols, headers):
+                col.write(f"**{h}**")
+            
+            for trade in reversed(st.session_state.trades):
+                c = st.columns([1.2, 0.8, 0.8, 1, 1, 1, 1, 0.8, 1.2, 0.8])
+                c[0].write(trade["Время"])
+                c[1].write(trade["Тип"])
+                c[2].write(trade["Монета"])
+                c[3].write(str(trade["Кол-во"]))
+                c[4].write(str(trade["Вход"]))
+                c[5].write(str(trade["Стоп"]))
+                c[6].write(str(trade["Тейк"]))
+                c[7].write(str(trade["RR"]))
+                
+                # Показываем прибыль и убыток в одной колонке
+                pl_text = f"+{trade['Profit']}$ / -{trade['Loss']}$"
+                c[8].write(pl_text)
+                
+                if c[9].button("🗑️", key=f"del_{trade['id']}"):
+                    st.session_state.trades = [t for t in st.session_state.trades if t['id'] != trade['id']]
+                    st.rerun()
