@@ -13,18 +13,16 @@ if 'history' not in st.session_state:
 
 placeholder = st.empty()
 
-# Специальные заголовки, чтобы Binance не блокировал облачный сервер
 headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 }
 
 while True:
     try:
-        # Пытаемся подключиться через альтернативный шлюз api3
         url = f"https://api3.binance.com/api/3/ticker/price?symbol={symbol}"
         response = requests.get(url, headers=headers, timeout=10)
         
-      if response.status_code == 200:
+        if response.status_code == 200:
             data = response.json()
             price = float(data['price'])
             
@@ -36,12 +34,12 @@ while True:
                 st.line_chart(st.session_state.history.set_index('Время'))
                 st.table(st.session_state.history.iloc[::-1])
         else:
-            st.error(f"Binance ответил кодом {response.status_code}. Пробуем пробиться...")
+            st.error(f"Binance ответил кодом {response.status_code}")
             
         time.sleep(2)
         st.rerun()
         
     except Exception as e:
-        st.error("Поиск шлюза Binance... Пожалуйста, подождите.")
+        st.error(f"Поиск шлюза Binance... Проверьте тикер!")
         time.sleep(5)
         st.rerun()
