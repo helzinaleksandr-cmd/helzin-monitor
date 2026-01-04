@@ -1,45 +1,43 @@
 import streamlit as st
-import requests
 import pandas as pd
 import time
+import json
+from websocket import create_connection
 
 st.set_page_config(page_title="Helzin Binance Terminal", layout="wide")
 st.title("🚀 Helzin Market Monitor (Binance Live)")
 
-symbol = st.sidebar.text_input("Тикер Binance", "BTCUSDT").upper()
+symbol = st.sidebar.text_input("Тикер Binance", "BTCUSDT").lower()
 
 if 'history' not in st.session_state:
     st.session_state.history = pd.DataFrame(columns=['Время', 'Цена'])
 
 placeholder = st.empty()
 
-headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-}
+# Используем WebSocket - он пробивает блокировки 451
+ws_url = f"wss://stream.binance.com:9443/ws/{symbol}@ticker"
 
-while True:
+def stream_data():
     try:
-        url = f"https://api3.binance.com/api/3/ticker/price?symbol={symbol}"
-        response = requests.get(url, headers=headers, timeout=10)
-        
-        if response.status_code == 200:
-            data = response.json()
-            price = float(data['price'])
+        ws = create_connection(ws_url)
+        while True:
+            result = ws.recv()
+            data = json.loads(result)
+            price = float(data['c']) # 'c' - это текущая цена в Binance WS
             
+            # Обновляем данные
             new_row = pd.DataFrame({'Время': [time.strftime("%H:%M:%S")], 'Цена': [price]})
             st.session_state.history = pd.concat([st.session_state.history, new_row]).iloc[-20:]
             
             with placeholder.container():
-                st.metric(f"Binance Live: {symbol}", f"${price:,.2f}")
+                st.metric(f"Binance Live: {symbol.upper()}", f"${price:,.2f}")
                 st.line_chart(st.session_state.history.set_index('Время'))
                 st.table(st.session_state.history.iloc[::-1])
-        else:
-            st.error(f"Binance ответил кодом {response.status_code}")
             
-        time.sleep(2)
-        st.rerun()
-        
+            time.sleep(1) # Обновление каждую секунду!
     except Exception as e:
-        st.error(f"Поиск шлюза Binance... Проверьте тикер!")
+        st.error(f"Переподключение к Binance...")
         time.sleep(5)
         st.rerun()
+
+stream_data()
