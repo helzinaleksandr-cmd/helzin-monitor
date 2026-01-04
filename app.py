@@ -4,7 +4,6 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime
 
-# Настройки оформления
 st.set_page_config(page_title="Helzin Trading Terminal", layout="wide")
 
 # Инициализация данных
@@ -15,7 +14,6 @@ if 'logged_in' not in st.session_state:
 if 'trades' not in st.session_state:
     st.session_state.trades = []
 
-# Функция получения данных с разными ТФ
 def get_crypto_data(ticker, tf):
     tf_map = {"5m": ("histominute", 5), "15m": ("histominute", 15), 
               "1h": ("histohour", 1), "4h": ("histohour", 4), "1d": ("histoday", 1)}
@@ -29,7 +27,23 @@ def get_crypto_data(ticker, tf):
     except:
         return None
 
-# --- ВХОД В СИСТЕМУ ---
+# --- ЛОГИКА ПРОВЕРКИ СТАТУСА СДЕЛКИ ---
+def update_trade_statuses(current_price):
+    for trade in st.session_state.trades:
+        if trade['Статус'] == "OPEN":
+            # Проверка для LONG
+            if trade['Тип'] == "LONG":
+                if current_price >= trade['Тейк'] and trade['Тейк'] > 0:
+                    trade['Статус'] = "✅ TAKE PROFIT"
+                elif current_price <= trade['Стоп'] and trade['Стоп'] > 0:
+                    trade['Статус'] = "❌ STOP LOSS"
+            # Проверка для SHORT
+            elif trade['Тип'] == "SHORT":
+                if current_price <= trade['Тейк'] and trade['Тейк'] > 0:
+                    trade['Статус'] = "✅ TAKE PROFIT"
+                elif current_price >= trade['Стоп'] and trade['Стоп'] > 0:
+                    trade['Статус'] = "❌ STOP LOSS"
+
 if not st.session_state.logged_in:
     st.title("🔐 Helzin Terminal")
     u = st.text_input("Логин")
@@ -40,15 +54,18 @@ if not st.session_state.logged_in:
             st.session_state.user = u
             st.rerun()
 else:
-    # --- ЛЕВАЯ КОЛОНКА (УПРАВЛЕНИЕ) ---
+    # --- ЛЕВАЯ ПАНЕЛЬ ---
     with st.sidebar:
         st.header(f"👤 {st.session_state.user}")
-        
         st.subheader("➕ Новая сделка")
-        # Группируем ввод данных строго слева
         t_side = st.radio("Направление", ["LONG", "SHORT"], horizontal=True)
         t_coin = st.text_input("Монета", "BTC").upper()
-        t_entry = st.number_input("Вход", value=0.0, format="%.2f")
+        
+        # Получаем текущую цену для удобства ввода
+        temp_df = get_crypto_data(t_coin, "5m")
+        curr_p = temp_df['close'].iloc[-1] if temp_df is not None else 0.0
+        
+        t_entry = st.number_input("Вход", value=float(curr_p), format="%.2f")
         t_stop = st.number_input("Стоп", value=0.0, format="%.2f")
         t_take = st.number_input("Тейк", value=0.0, format="%.2f")
         
@@ -58,46 +75,44 @@ else:
                 "Тип": t_side, "Монета": t_coin, "Вход": t_entry, 
                 "Стоп": t_stop, "Тейк": t_take, "Статус": "OPEN"
             })
-            st.success("Сделка добавлена!")
+            st.success("Сделка открыта!")
         
         st.divider()
         if st.button("Выход", use_container_width=True):
             st.session_state.logged_in = False
             st.rerun()
 
-    # --- ОСНОВНАЯ ЧАСТЬ (ГРАФИК И ЖУРНАЛ) ---
-    tab1, tab2 = st.tabs(["🕯 График и Аналитика", "📑 Журнал сделок"])
+    # --- ОСНОВНОЙ ЭКРАН ---
+    tab1, tab2 = st.tabs(["🕯 График", "📑 Журнал сделок"])
 
     with tab1:
         c1, c2 = st.columns([1, 3])
-        active_coin = c1.text_input("Поиск тикера", "BTC").upper()
+        active_coin = c1.text_input("Тикер", "BTC").upper()
         active_tf = c2.select_slider("Таймфрейм", options=["5m", "15m", "1h", "4h", "1d"], value="15m")
         
         df = get_crypto_data(active_coin, active_tf)
         if df is not None:
             price = df['close'].iloc[-1]
-            st.metric(f"Цена {active_coin}/USDT ({active_tf})", f"${price:,.2f}")
+            st.metric(f"Цена {active_coin}/USDT", f"${price:,.2f}")
             
-            # Профессиональный график
+            # ОБНОВЛЯЕМ СТАТУСЫ СДЕЛКИ
+            update_trade_statuses(price)
+            
             fig = go.Figure(data=[go.Candlestick(
                 x=df['time'], open=df['open'], high=df['high'],
                 low=df['low'], close=df['close'],
                 increasing_line_color='#26a69a', decreasing_line_color='#ef5350'
             )])
-            fig.update_layout(template="plotly_dark", height=600, xaxis_rangeslider_visible=False,
-                             yaxis=dict(autorange=True, fixedrange=False), margin=dict(l=0, r=0, t=0, b=0))
+            fig.update_layout(template="plotly_dark", height=500, xaxis_rangeslider_visible=False)
             st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.error("Ошибка загрузки данных Binance")
+            
+            if st.button("Обновить"):
+                st.rerun()
 
     with tab2:
-        st.subheader("Ваши позиции")
+        st.subheader("Журнал ордеров")
         if st.session_state.trades:
-            # Вывод таблицы сделок
             df_trades = pd.DataFrame(st.session_state.trades)
             st.dataframe(df_trades.iloc[::-1], use_container_width=True)
-            if st.button("Очистить все сделки"):
-                st.session_state.trades = []
-                st.rerun()
         else:
-            st.info("Сделок пока не зафиксировано")
+            st.info("Сделок нет")
