@@ -9,156 +9,142 @@ import time
 st.set_page_config(page_title="Helzin Terminal Pro", layout="wide")
 
 # Инициализация состояния
-if 'trades' not in st.session_state:
-    st.session_state.trades = []
-if 'balance' not in st.session_state:
-    st.session_state.balance = 1000.0
-if 'price' not in st.session_state:
-    st.session_state.price = 0.0
-if 'tf' not in st.session_state:
-    st.session_state.tf = "15m"
+if 'trades' not in st.session_state: st.session_state.trades = []
+if 'balance' not in st.session_state: st.session_state.balance = 1000.0
+if 'price' not in st.session_state: st.session_state.price = 0.0
+if 'tf' not in st.session_state: st.session_state.tf = "15m"
 
-# Функция получения данных (БЫСТРАЯ — Binance/CryptoCompare)
+# Функция получения данных
 def get_data(symbol, tf):
-    # Маппинг таймфреймов
     ag = {"5m": 5, "15m": 15, "1h": 1, "4h": 4, "1d": 1}
     suffix = "histominute" if "m" in tf else "histohour" if "h" in tf else "histoday"
-    
     url = f"https://min-api.cryptocompare.com/data/v2/{suffix}?fsym={symbol}&tsym=USDT&limit=100&aggregate={ag.get(tf, 15)}&e=Binance"
-    
     try:
-        response = requests.get(url, timeout=10)
+        response = requests.get(url, timeout=5)
         data = response.json()
         if data.get('Response') == 'Success':
             df = pd.DataFrame(data['Data']['Data'])
             df['time'] = pd.to_datetime(df['time'], unit='s')
-            current_price = float(df['close'].iloc[-1])
-            st.session_state.price = current_price
-            return df, current_price
-        return None, 0.0
-    except Exception as e:
-        return None, 0.0
+            # Важно: Сразу пишем цену в состояние, чтобы все функции её видели
+            st.session_state.price = float(df['close'].iloc[-1])
+            return df
+    except:
+        return None
+    return None
 
-# === САЙДБАР ===
+# --- АВТОМАТИЧЕСКАЯ ПРОВЕРКА (ГЛАВНЫЙ ДВИЖОК) ---
+# Обновляем данные в фоне каждые 5-10 секунд
+refresh_sec = 7 
+ticker_global = "BTC" # Можно вынести в ввод
+
+# Каждое обновление страницы или таймера проверяем сделки
+df_latest = get_data(ticker_global, st.session_state.tf)
+cur_p = st.session_state.price
+
+for trade in st.session_state.trades:
+    if "⏳" in trade["status"]:
+        # Считаем текущий профит для проверки закрытия
+        pnl_check = (cur_p - trade["entry"]) * trade["qty"] if trade["side"] == "LONG" else (trade["entry"] - cur_p) * trade["qty"]
+        
+        closed = False
+        if trade["side"] == "LONG":
+            if cur_p >= trade["tp"] and trade["tp"] > 0:
+                trade["status"] = "Тейк ✅"; closed = True
+            elif cur_p <= trade["sl"] and trade["sl"] > 0:
+                trade["status"] = "Стоп ❌"; closed = True
+        else: # SHORT
+            if cur_p <= trade["tp"] and trade["tp"] > 0:
+                trade["status"] = "Тейк ✅"; closed = True
+            elif cur_p >= trade["sl"] and trade["sl"] > 0:
+                trade["status"] = "Стоп ❌"; closed = True
+        
+        if closed:
+            trade["final_pnl"] = pnl_check # ФИКСИРУЕМ ПРИБЫЛЬ НА МОМЕНТ ЗАКРЫТИЯ
+
+# --- САЙДБАР ---
 with st.sidebar:
     st.title("👤 Admin")
     st.session_state.balance = st.number_input("Депозит ($)", min_value=0.0, value=float(st.session_state.balance))
-
     st.divider()
     st.subheader("➕ Новая сделка")
     with st.form("trade_form", clear_on_submit=True):
         side = st.radio("Направление", ["LONG", "SHORT"], horizontal=True)
         coin = st.text_input("Монета", "BTC").upper()
-        # Поля пустые для удобства
-        entry = st.number_input("Цена входа", min_value=0.0, value=float(st.session_state.price), format="%.2f")
-        qty = st.number_input("Кол-во монет", min_value=0.0, value=0.0, step=0.001)
-        sl = st.number_input("Стоп-лосс", min_value=0.0, value=0.0, format="%.2f")
-        tp = st.number_input("Тейк-профит", min_value=0.0, value=0.0, format="%.2f")
+        # ПУСТЫЕ СТРОЧКИ (как ты просил)
+        entry = st.number_input("Цена входа", value=None, placeholder="Цена...", format="%.2f")
+        qty = st.number_input("Кол-во монет", value=None, placeholder="Кол-во...", step=0.0001)
+        sl = st.number_input("Стоп-лосс", value=None, placeholder="Стоп...", format="%.2f")
+        tp = st.number_input("Тейк-профит", value=None, placeholder="Тейк...", format="%.2f")
 
-        submitted = st.form_submit_button("ОТКРЫТЬ ПОЗИЦИЮ", use_container_width=True)
-        if submitted and qty > 0 and entry > 0:
-            risk = abs(entry - sl) if sl > 0 else 0
-            reward = abs(tp - entry) if tp > 0 else 0
-            rr = round(reward / risk, 2) if risk > 0 else 0.0
+        if st.form_submit_button("ОТКРЫТЬ ПОЗИЦИЮ", use_container_width=True):
+            if entry and qty:
+                risk = abs(entry - sl) if sl else 0
+                reward = abs(tp - entry) if tp else 0
+                rr = round(reward / risk, 2) if risk > 0 else 0.0
+                st.session_state.trades.append({
+                    "id": time.time(), "time": datetime.now().strftime("%H:%M:%S"),
+                    "coin": coin, "side": side, "entry": float(entry),
+                    "qty": float(qty), "sl": float(sl) if sl else 0.0, 
+                    "tp": float(tp) if tp else 0.0, "rr": rr, 
+                    "status": "В процессе ⏳", "final_pnl": None 
+                })
+                st.rerun()
 
-            st.session_state.trades.append({
-                "id": time.time(),
-                "time": datetime.now().strftime("%H:%M:%S"),
-                "coin": coin,
-                "side": side,
-                "entry": entry,
-                "qty": qty,
-                "sl": sl,
-                "tp": tp,
-                "rr": rr,
-                "status": "В процессе ⏳"
-            })
-            st.rerun()
-
-# === ОСНОВНЫЕ ВКЛАДКИ ===
+# --- ВКЛАДКИ ---
 tab_trade, tab_journal = st.tabs(["🕯 Торговля", "📓 Журнал"])
 
 with tab_trade:
-    col1, col2 = st.columns([1, 3])
-    with col1:
-        ticker = st.text_input("Тикер", value="BTC").upper()
+    c1, c2, c3 = st.columns([1, 1, 2.5])
+    with c1: ticker = st.text_input("Тикер", value="BTC").upper()
+    with c2: st.selectbox("Рынок", ["FUTURES", "SPOT"])
+    with c3:
         st.write("Таймфрейм")
-        tf_cols = st.columns(5)
-        tfs = ["5m", "15m", "1h", "4h", "1d"]
-        for i, tf_val in enumerate(tfs):
-            if tf_cols[i].button(tf_val, key=f"tf_{tf_val}"):
-                st.session_state.tf = tf_val
-                st.rerun()
+        tf_list = ["5m", "15m", "1h", "4h", "1d"]
+        cols = st.columns(len(tf_list))
+        for idx, tf_item in enumerate(tf_list):
+            is_active = st.session_state.tf == tf_item
+            if cols[idx].button(tf_item, key=f"tf_{tf_item}", type="primary" if is_active else "secondary", use_container_width=True):
+                st.session_state.tf = tf_item; st.rerun()
 
-    df, current_price = get_data(ticker, st.session_state.tf)
-
-    # Метрики
     m1, m2, m3 = st.columns(3)
-    m1.metric("Текущая цена", f"${current_price:,.2f}" if current_price > 0 else "—")
+    m1.metric("Текущая цена", f"${cur_p:,.2f}" if cur_p > 0 else "—")
     m2.metric("Депозит", f"${st.session_state.balance:,.2f}")
-    m3.metric("Активных сделок", len([t for t in st.session_state.trades if "⏳" in t["status"]]))
+    m3.metric("Активных", len([t for t in st.session_state.trades if "⏳" in t["status"]]))
 
-    # График
-    if df is not None and not df.empty:
-        fig = go.Figure(data=[go.Candlestick(
-            x=df['time'],
-            open=df['open'],
-            high=df['high'],
-            low=df['low'],
-            close=df['close']
-        )])
-        fig.update_layout(template="plotly_dark", height=600, xaxis_rangeslider_visible=False, margin=dict(l=20, r=20, t=20, b=20))
+    if df_latest is not None:
+        fig = go.Figure(data=[go.Candlestick(x=df_latest['time'], open=df_latest['open'], high=df_latest['high'], low=df_latest['low'], close=df_latest['close'])])
+        fig.update_layout(template="plotly_dark", height=500, xaxis_rangeslider_visible=False, margin=dict(l=0, r=0, t=0, b=0))
         st.plotly_chart(fig, use_container_width=True)
-    else:
-        st.warning("Нажми кнопку ниже, чтобы загрузить данные.")
-    
-    if st.button("🔄 Обновить цену и график", use_container_width=True):
-        st.rerun()
 
-# === ЖУРНАЛ ===
 with tab_journal:
     st.subheader("📓 Журнал сделок")
-
     if st.session_state.trades:
-        # Сетка таблицы
-        headers = st.columns([1, 1, 1, 1, 1, 1, 0.8, 1.2, 1, 0.5])
-        header_names = ["Время", "Актив", "Тип", "Вход", "Стоп", "Тейк", "RR", "Прибыль ($)", "Статус", ""]
-        for col, name in zip(headers, header_names):
-            col.markdown(f"**{name}**")
+        # ПРАВИЛЬНЫЕ КОЛОНКИ С КОЛ-ВОМ
+        h = st.columns([1, 1, 0.8, 1, 1, 1, 1, 0.7, 1.2, 1, 0.5])
+        names = ["Время", "Актив", "Тип", "Кол-во", "Вход", "Стоп", "Тейк", "RR", "Прибыль ($)", "Статус", ""]
+        for col, n in zip(h, names): col.markdown(f"**{n}**")
 
-        for trade in st.session_state.trades:
-            # Считаем прибыль на основе ПОСЛЕДНЕЙ полученной цены
-            cur_p = st.session_state.price if st.session_state.price > 0 else trade["entry"]
+        for i, trade in enumerate(st.session_state.trades):
+            # Показываем или финальную прибыль, или живую
+            display_pnl = trade["final_pnl"] if trade["final_pnl"] is not None else (
+                (cur_p - trade["entry"]) * trade["qty"] if trade["side"] == "LONG" else (trade["entry"] - cur_p) * trade["qty"]
+            )
 
-            # PnL (Прибыль)
-            if trade["side"] == "LONG":
-                pnl = (cur_p - trade["entry"]) * trade["qty"]
-            else:
-                pnl = (trade["entry"] - cur_p) * trade["qty"]
-
-            # Авто-закрытие
-            if "⏳" in trade["status"]:
-                if trade["side"] == "LONG":
-                    if cur_p >= trade["tp"] and trade["tp"] > 0: trade["status"] = "Тейк ✅"
-                    elif cur_p <= trade["sl"] and trade["sl"] > 0: trade["status"] = "Стоп ❌"
-                else: # SHORT
-                    if cur_p <= trade["tp"] and trade["tp"] > 0: trade["status"] = "Тейк ✅"
-                    elif cur_p >= trade["sl"] and trade["sl"] > 0: trade["status"] = "Стоп ❌"
-
-            cols = st.columns([1, 1, 1, 1, 1, 1, 0.8, 1.2, 1, 0.5])
+            cols = st.columns([1, 1, 0.8, 1, 1, 1, 1, 0.7, 1.2, 1, 0.5])
             cols[0].write(trade["time"])
             cols[1].write(trade["coin"])
             cols[2].write(trade["side"])
-            cols[3].write(f"{trade['entry']:.2f}")
-            cols[4].write(f"{trade['sl']:.2f}")
-            cols[5].write(f"{trade['tp']:.2f}")
-            cols[6].write(f"{trade['rr']}")
-            # Цветной вывод прибыли
-            pnl_color = "🟢" if pnl >= 0 else "🔴"
-            cols[7].write(f"{pnl_color} ${pnl:.2f}")
-            cols[8].write(trade["status"])
-            if cols[9].button("🗑️", key=f"del_{trade['id']}"):
-                st.session_state.trades.remove(trade)
-                st.rerun()
-    else:
-        st.info("Журнал пуст.")
+            cols[3].write(f"{trade['qty']}")
+            cols[4].write(f"{trade['entry']:.2f}")
+            cols[5].write(f"{trade['sl']:.2f}")
+            cols[6].write(f"{trade['tp']:.2f}")
+            cols[7].write(f"{trade['rr']}")
+            pnl_color = "🟢" if display_pnl >= 0 else "🔴"
+            cols[8].write(f"{pnl_color} ${display_pnl:.2f}")
+            cols[9].write(trade["status"])
+            if cols[10].button("🗑️", key=f"del_{trade['id']}"):
+                st.session_state.trades.pop(i); st.rerun()
+
+# --- ТАЙМЕР ОБНОВЛЕНИЯ ---
+time.sleep(refresh_sec)
+st.rerun()
